@@ -1,0 +1,43 @@
+package com.pulsechat.controller;
+import com.pulsechat.model.*;
+import com.pulsechat.repo.UserRepository;
+import com.pulsechat.service.GameService;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.web.bind.annotation.*;
+import java.util.*;
+
+@RestController @RequestMapping("/api/games")
+public class GameController {
+    private final GameService games; private final UserRepository users; private final SimpMessagingTemplate ws;
+    public GameController(GameService g,UserRepository u,SimpMessagingTemplate w){games=g;users=u;ws=w;}
+    private User u(org.springframework.security.core.Authentication a){return users.findById(a.getName()).orElseThrow();}
+    @GetMapping("/rooms") public List<GameRoom> rooms(){return games.rooms();}
+    @PostMapping("/rooms") public GameRoom create(@RequestBody Map<String,String> b,org.springframework.security.core.Authentication a){
+        GameRoom r=games.create(u(a),GameType.valueOf(b.get("gameType")));ws.convertAndSend("/topic/games",r);return r;
+    }
+    @PostMapping("/rooms/{id}/join") public GameRoom join(@PathVariable String id,org.springframework.security.core.Authentication a){
+        GameRoom r=games.join(u(a),id);
+        ws.convertAndSend("/topic/game/"+id,r);
+        if (r.getGameType()==GameType.LUDO) {
+            ws.convertAndSend("/topic/game/"+id+"/state",games.state(id));
+        }
+        return r;
+    }
+    @PostMapping("/rooms/{id}/leave") public GameRoom leave(@PathVariable String id,org.springframework.security.core.Authentication a){
+        GameRoom r=games.leave(u(a),id);
+        ws.convertAndSend("/topic/game/"+id,r);
+        if (r.getGameType()==GameType.LUDO) {
+            try { ws.convertAndSend("/topic/game/"+id+"/state",games.state(id)); } catch (Exception ignored) {}
+        }
+        return r;
+    }
+    @GetMapping("/rooms/{id}/state") public GameState state(@PathVariable String id){return games.state(id);}
+    @PostMapping("/rooms/{id}/action") public GameState action(@PathVariable String id,@RequestBody Map<String,Object>b,org.springframework.security.core.Authentication a){
+        GameState s=games.genericAction(u(a),id,String.valueOf(b.get("action")),b.get("payload"));
+        ws.convertAndSend("/topic/game/"+id+"/state",s);
+        if (s.getGameType()==GameType.LUDO) {
+            ws.convertAndSend("/topic/game/"+id,games.get(id));
+        }
+        return s;
+    }
+}
