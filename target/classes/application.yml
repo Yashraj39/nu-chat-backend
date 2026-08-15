@@ -15,7 +15,7 @@ management:
       exposure:
         include: health,info
 server:
-  port: ${PORT:8080}
+  port: ${PORT:10000}
   forward-headers-strategy: framework
 app:
   jwt-secret: ${JWT_SECRET}
