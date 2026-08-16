@@ -6,6 +6,7 @@ C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\config\WebSo
 C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\controller\AuthController.java
 C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\controller\ChatController.java
 C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\controller\GameController.java
+C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\controller\HealthController.java
 C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\dto\AuthDtos.java
 C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\dto\ErrorResponse.java
 C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\dto\GameDtos.java
@@ -26,6 +27,7 @@ C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\repo\UserRep
 C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\security\JwtAuthFilter.java
 C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\security\JwtService.java
 C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\service\AuthService.java
+C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\service\CloudinaryDownloadService.java
 C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\service\CloudinaryService.java
 C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\service\GameService.java
 C:\Projects\realtime-group-chat\backend\src\main\java\com\pulsechat\service\MessageService.java

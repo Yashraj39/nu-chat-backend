@@ -21,6 +21,7 @@ com\pulsechat\repo\UserRepository.class
 com\pulsechat\dto\AuthDtos$JoinResponse.class
 com\pulsechat\dto\AuthDtos$UserDto.class
 com\pulsechat\dto\MessageDtos.class
+com\pulsechat\service\CloudinaryDownloadService.class
 com\pulsechat\dto\GameDtos.class
 com\pulsechat\repo\GameRoomRepository.class
 com\pulsechat\dto\GameDtos$CreateRoomRequest.class
@@ -35,6 +36,7 @@ com\pulsechat\config\SecurityConfig.class
 com\pulsechat\controller\AuthController.class
 com\pulsechat\config\GlobalExceptionHandler.class
 com\pulsechat\model\User.class
+com\pulsechat\controller\HealthController.class
 com\pulsechat\dto\AuthDtos$JoinRequest.class
 com\pulsechat\model\Message$FileInfo.class
 com\pulsechat\security\JwtAuthFilter.class
