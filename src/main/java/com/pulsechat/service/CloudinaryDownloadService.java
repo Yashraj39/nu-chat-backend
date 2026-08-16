@@ -29,9 +29,11 @@ public class CloudinaryDownloadService {
     }
 
     /**
-     * Generates a short-lived Cloudinary authenticated download URL.
-     * PDFs and raw files are uploaded as private assets, so public PDF/ZIP
-     * delivery restrictions do not affect their downloads.
+     * Generates a short-lived Cloudinary download URL.
+     *
+     * New PDFs/raw files are private. Older files have /upload/ in their
+     * stored URL, so their original delivery type is preserved. Cloudinary's
+     * signed private-download API keeps the API secret server-side.
      */
     public String createDownloadUrl(Message.FileInfo file) {
         if (cloud == null) {
@@ -43,9 +45,7 @@ public class CloudinaryDownloadService {
 
         String resourceType = resolveResourceType(file.getMimeType());
         String format = resolveFormat(file.getOriginalName(), file.getPublicId());
-        boolean restricted = "raw".equals(resourceType)
-                || "application/pdf".equalsIgnoreCase(file.getMimeType());
-
+        String deliveryType = resolveDeliveryType(file.getUrl());
         long expiresAt = (System.currentTimeMillis() / 1000L) + 300L;
 
         return cloud.privateDownload(
@@ -53,11 +53,19 @@ public class CloudinaryDownloadService {
                 format,
                 ObjectUtils.asMap(
                         "resource_type", resourceType,
-                        "type", restricted ? "private" : "upload",
+                        "type", deliveryType,
                         "attachment", true,
                         "expires_at", expiresAt
                 )
         );
+    }
+
+    private String resolveDeliveryType(String storedUrl) {
+        if (storedUrl != null) {
+            if (storedUrl.contains("/private/")) return "private";
+            if (storedUrl.contains("/authenticated/")) return "authenticated";
+        }
+        return "upload";
     }
 
     private String resolveResourceType(String mime) {
