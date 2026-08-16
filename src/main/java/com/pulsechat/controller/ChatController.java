@@ -103,7 +103,7 @@ public class ChatController {
     public Map<String, String> fileDownloadUrl(
             @PathVariable String messageId,
             org.springframework.security.core.Authentication a
-    ) {
+    ) throws Exception {
         Message message = messageRepo.findById(messageId)
                 .orElseThrow(() -> new NoSuchElementException("Message not found."));
 
