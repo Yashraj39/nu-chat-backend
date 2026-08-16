@@ -68,13 +68,21 @@ public class GameService {
 
     public List<GameRoom> rooms() {
 
-        return rooms.findTop50ByStatusInOrderByUpdatedAtDesc(
-                List.of(
-                        RoomStatus.WAITING,
-                        RoomStatus.PLAYING,
-                        RoomStatus.STARTING
+        return rooms
+                .findTop50ByStatusInOrderByUpdatedAtDesc(
+                        List.of(
+                                RoomStatus.WAITING,
+                                RoomStatus.PLAYING,
+                                RoomStatus.STARTING
+                        )
                 )
-        );
+                .stream()
+                .filter(
+                        room ->
+                                room.getPlayers() != null &&
+                                        !room.getPlayers().isEmpty()
+                )
+                .toList();
     }
 
 
@@ -348,19 +356,20 @@ public class GameService {
 
         GameRoom room =
                 rooms.findById(id)
-                        .orElseThrow();
+                        .orElseThrow(
+                                () -> new NoSuchElementException(
+                                        "Room not found."
+                                )
+                        );
 
-
-        room.getPlayers()
-                .removeIf(
-                        player ->
-                                player.getUserId()
-                                        .equals(user.getId())
-                );
-
+        room.getPlayers().removeIf(
+                player ->
+                        player.getUserId()
+                                .equals(user.getId())
+        );
 
         /*
-         * Remove player's Snake state as well.
+         * Existing Snake cleanup.
          */
         if (room.getGameType() == GameType.SNAKE) {
 
@@ -402,90 +411,181 @@ public class GameService {
                         user.getId()
                 );
 
-                gameState.setUpdatedAt(
-                        Instant.now()
-                );
+                gameState.setUpdatedAt(Instant.now());
 
                 states.save(gameState);
 
             } catch (Exception ignored) {
-                // Room/state may already be gone.
             }
         }
 
-
+        /*
+         * Existing Ludo cleanup.
+         */
         if (room.getGameType() == GameType.LUDO) {
-            try {
-                GameState gameState = state(id);
-                Map<String, Object> game = gameState.getState();
 
-                Map<String, Object> pieces = objectMap(game, "pieces");
-                Map<String, Object> legalMoves = objectMap(game, "legalMoves");
+            try {
+
+                GameState gameState =
+                        state(id);
+
+                Map<String, Object> game =
+                        gameState.getState();
+
+                Map<String, Object> pieces =
+                        objectMap(game, "pieces");
+
+                Map<String, Object> legalMoves =
+                        objectMap(game, "legalMoves");
+
                 pieces.remove(user.getId());
                 legalMoves.remove(user.getId());
 
-                List<String> order = ludoPlayerOrder(gameState, room);
+                List<String> order =
+                        ludoPlayerOrder(
+                                gameState,
+                                room
+                        );
+
                 order.remove(user.getId());
+
                 game.put("playerOrder", order);
 
-                String currentId = String.valueOf(game.get("turnPlayerId"));
-                if (!order.isEmpty()) {
-                    int oldTurnIndex = numberValue(game.get("turnIndex"), 0);
+                if (order.isEmpty()) {
 
-                    if (currentId.equals(user.getId()) || !order.contains(currentId)) {
-                        int nextIndex = order.isEmpty() ? 0 : Math.floorMod(oldTurnIndex, order.size());
-                        if (nextIndex >= order.size()) nextIndex = 0;
-                        game.put("turnIndex", nextIndex);
-                        game.put("turnPlayerId", order.get(nextIndex));
-                    } else {
-                        int newIndex = order.indexOf(currentId);
-                        game.put("turnIndex", newIndex < 0 ? 0 : newIndex);
-                    }
-                } else {
                     game.put("turnIndex", 0);
                     game.put("turnPlayerId", null);
+
+                } else {
+
+                    String currentId =
+                            String.valueOf(
+                                    game.get("turnPlayerId")
+                            );
+
+                    if (
+                            currentId.equals(user.getId()) ||
+                                    !order.contains(currentId)
+                    ) {
+
+                        int nextIndex =
+                                Math.floorMod(
+                                        numberValue(
+                                                game.get("turnIndex"),
+                                                0
+                                        ),
+                                        order.size()
+                                );
+
+                        game.put(
+                                "turnIndex",
+                                nextIndex
+                        );
+
+                        game.put(
+                                "turnPlayerId",
+                                order.get(nextIndex)
+                        );
+
+                    } else {
+
+                        int newIndex =
+                                order.indexOf(currentId);
+
+                        game.put(
+                                "turnIndex",
+                                Math.max(
+                                        0,
+                                        newIndex
+                                )
+                        );
+                    }
                 }
 
                 game.put("dice", 0);
                 game.put("consecutiveSixes", 0);
                 game.put("legalMoves", legalMoves);
-                game.put("message", "A player left the match.");
+                game.put(
+                        "message",
+                        "A player left the match."
+                );
+
                 gameState.setUpdatedAt(Instant.now());
+
                 states.save(gameState);
+
             } catch (Exception ignored) {
-                // Room/state may already be gone.
             }
 
+            /*
+             * Transfer host only when players remain.
+             */
             if (!room.getPlayers().isEmpty()) {
-                String oldHost = room.getHostId();
-                boolean hostStillPresent = room.getPlayers().stream()
-                        .anyMatch(p -> p.getUserId().equals(oldHost));
+
+                String oldHost =
+                        room.getHostId();
+
+                boolean hostStillPresent =
+                        room.getPlayers()
+                                .stream()
+                                .anyMatch(
+                                        p ->
+                                                p.getUserId()
+                                                        .equals(oldHost)
+                                );
+
                 if (!hostStillPresent) {
-                    room.setHostId(room.getPlayers().get(0).getUserId());
+
+                    room.setHostId(
+                            room.getPlayers()
+                                    .get(0)
+                                    .getUserId()
+                    );
                 }
             }
         }
 
-
+        /*
+         * ========================================================
+         * IMPORTANT: EMPTY ROOM
+         * ========================================================
+         *
+         * If nobody remains, permanently remove the room and its
+         * persisted game state.
+         */
         if (room.getPlayers().isEmpty()) {
 
+            try {
+                states.deleteById(id);
+            } catch (Exception ignored) {
+            }
+
+            ws.convertAndSend(
+                    "/topic/game/rooms/remove",
+                    id
+            );
+
+            rooms.deleteById(id);
+
+            return room;
+        }
+
+        /*
+         * Existing non-empty room handling.
+         */
+        if (
+                room.getGameType() == GameType.LUDO &&
+                        room.getStatus() == RoomStatus.PLAYING &&
+                        room.getPlayers().size() < 2
+        ) {
+
             room.setStatus(
-                    RoomStatus.CANCELLED
+                    RoomStatus.FINISHED
             );
 
         } else if (
-                room.getGameType() == GameType.LUDO
-        ) {
-
-            if (
-                    room.getStatus() == RoomStatus.PLAYING &&
-                            room.getPlayers().size() < 2
-            ) {
-                room.setStatus(RoomStatus.FINISHED);
-            }
-
-        } else if (
-                room.getStatus() == RoomStatus.PLAYING
+                room.getGameType() != GameType.LUDO &&
+                        room.getStatus() == RoomStatus.PLAYING
         ) {
 
             room.setStatus(
@@ -493,11 +593,7 @@ public class GameService {
             );
         }
 
-
-        room.setUpdatedAt(
-                Instant.now()
-        );
-
+        room.setUpdatedAt(Instant.now());
 
         return rooms.save(room);
     }
