@@ -34,8 +34,13 @@ public class CloudinaryService {
     }
 
     /**
-     * Upload arbitrary file types. MIME type is metadata, not an allow-list,
-     * because browsers can report application/octet-stream for valid files.
+     * Upload files using an explicit Cloudinary resource type.
+     *
+     * PDFs are kept as image assets because Cloudinary natively supports PDF
+     * delivery and browser viewing that way. Video/audio use the video asset
+     * type. Everything else is uploaded as a raw asset so archives and other
+     * arbitrary files are preserved byte-for-byte instead of being auto-
+     * detected as another asset type.
      */
     public UploadResult upload(MultipartFile f) throws IOException {
         if (cloud == null) {
@@ -54,16 +59,16 @@ public class CloudinaryService {
 
         String name = sanitizeFilename(f.getOriginalFilename());
         String mime = normalizeMime(f.getContentType());
+        String resourceType = resolveResourceType(name, mime);
 
-        // Cloudinary decides whether the upload is an image, video, audio,
-        // or raw resource. This removes the old hard-coded file-type list.
         Map<?, ?> result = (Map<?, ?>) cloud.uploader().upload(
                 f.getBytes(),
                 ObjectUtils.asMap(
-                        "resource_type", "auto",
+                        "resource_type", resourceType,
                         "folder", "pulsechat",
                         "use_filename", true,
-                        "unique_filename", true
+                        "unique_filename", true,
+                        "filename_override", name
                 )
         );
 
@@ -74,6 +79,28 @@ public class CloudinaryService {
                 mime,
                 f.getSize()
         );
+    }
+
+    private String resolveResourceType(String filename, String mime) {
+        String lowerName = filename.toLowerCase(Locale.ROOT);
+
+        // Cloudinary supports PDFs as image assets, which also enables normal
+        // PDF delivery and browser rendering.
+        if ("application/pdf".equals(mime) || lowerName.endsWith(".pdf")) {
+            return "image";
+        }
+
+        if (mime.startsWith("image/")) {
+            return "image";
+        }
+
+        // Cloudinary treats audio as video resources.
+        if (mime.startsWith("video/") || mime.startsWith("audio/")) {
+            return "video";
+        }
+
+        // ZIP/RAR/7z/DOCX/APK/JAR/source files/etc. stay raw.
+        return "raw";
     }
 
     private String sanitizeFilename(String original) {
