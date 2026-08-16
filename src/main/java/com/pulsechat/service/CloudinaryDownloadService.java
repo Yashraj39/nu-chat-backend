@@ -35,7 +35,7 @@ public class CloudinaryDownloadService {
      * stored URL, so their original delivery type is preserved. Cloudinary's
      * signed private-download API keeps the API secret server-side.
      */
-    public String createDownloadUrl(Message.FileInfo file) {
+    public String createDownloadUrl(Message.FileInfo file) throws Exception {
         if (cloud == null) {
             throw new IllegalStateException("Cloudinary is not configured.");
         }
