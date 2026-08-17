@@ -77,10 +77,10 @@ public class GameService {
                         )
                 )
                 .stream()
-                .filter(
-                        room ->
-                                room.getPlayers() != null &&
-                                        !room.getPlayers().isEmpty()
+                .filter(Objects::nonNull)
+                .filter(room ->
+                        room.getPlayers() != null &&
+                                !room.getPlayers().isEmpty()
                 )
                 .toList();
     }
@@ -354,29 +354,74 @@ public class GameService {
             String id
     ) {
 
-        GameRoom room =
-                rooms.findById(id)
-                        .orElseThrow(
-                                () -> new NoSuchElementException(
-                                        "Room not found."
-                                )
-                        );
+        GameRoom room = rooms.findById(id)
+                .orElseThrow(
+                        () -> new NoSuchElementException(
+                                "Room not found."
+                        )
+                );
 
-        room.getPlayers().removeIf(
-                player ->
-                        player.getUserId()
+        // Make sure the user is actually in the room
+        boolean wasPlayer = room.getPlayers()
+                .removeIf(
+                        player -> player.getUserId()
                                 .equals(user.getId())
-        );
+                );
+
+        if (!wasPlayer) {
+            throw new SecurityException(
+                    "You are not a player in this room."
+            );
+        }
 
         /*
-         * Existing Snake cleanup.
+         * ========================================================
+         * EMPTY ROOM
+         * ========================================================
+         *
+         * If nobody remains, permanently delete BOTH:
+         * - GameState
+         * - GameRoom
+         *
+         * IMPORTANT:
+         * Do not return the deleted GameRoom.
+         */
+        if (room.getPlayers().isEmpty()) {
+
+            try {
+                states.deleteById(id);
+            } catch (Exception ignored) {
+            }
+
+            try {
+                rooms.deleteById(id);
+            } catch (Exception ignored) {
+            }
+
+            // Notify every room-list client that this room is gone.
+            ws.convertAndSend(
+                    "/topic/game/rooms/remove",
+                    id
+            );
+
+            /*
+             * Return null because the room no longer exists.
+             *
+             * Controller will handle this.
+             */
+            return null;
+        }
+
+        /*
+         * ========================================================
+         * SNAKE CLEANUP
+         * ========================================================
          */
         if (room.getGameType() == GameType.SNAKE) {
 
             try {
 
-                GameState gameState =
-                        state(id);
+                GameState gameState = state(id);
 
                 Map<String, Object> game =
                         gameState.getState();
@@ -411,7 +456,9 @@ public class GameService {
                         user.getId()
                 );
 
-                gameState.setUpdatedAt(Instant.now());
+                gameState.setUpdatedAt(
+                        Instant.now()
+                );
 
                 states.save(gameState);
 
@@ -420,14 +467,15 @@ public class GameService {
         }
 
         /*
-         * Existing Ludo cleanup.
+         * ========================================================
+         * LUDO CLEANUP
+         * ========================================================
          */
         if (room.getGameType() == GameType.LUDO) {
 
             try {
 
-                GameState gameState =
-                        state(id);
+                GameState gameState = state(id);
 
                 Map<String, Object> game =
                         gameState.getState();
@@ -449,12 +497,22 @@ public class GameService {
 
                 order.remove(user.getId());
 
-                game.put("playerOrder", order);
+                game.put(
+                        "playerOrder",
+                        order
+                );
 
                 if (order.isEmpty()) {
 
-                    game.put("turnIndex", 0);
-                    game.put("turnPlayerId", null);
+                    game.put(
+                            "turnIndex",
+                            0
+                    );
+
+                    game.put(
+                            "turnPlayerId",
+                            null
+                    );
 
                 } else {
 
@@ -502,15 +560,29 @@ public class GameService {
                     }
                 }
 
-                game.put("dice", 0);
-                game.put("consecutiveSixes", 0);
-                game.put("legalMoves", legalMoves);
+                game.put(
+                        "dice",
+                        0
+                );
+
+                game.put(
+                        "consecutiveSixes",
+                        0
+                );
+
+                game.put(
+                        "legalMoves",
+                        legalMoves
+                );
+
                 game.put(
                         "message",
                         "A player left the match."
                 );
 
-                gameState.setUpdatedAt(Instant.now());
+                gameState.setUpdatedAt(
+                        Instant.now()
+                );
 
                 states.save(gameState);
 
@@ -518,63 +590,36 @@ public class GameService {
             }
 
             /*
-             * Transfer host only when players remain.
+             * Transfer host if necessary.
              */
-            if (!room.getPlayers().isEmpty()) {
+            String oldHost =
+                    room.getHostId();
 
-                String oldHost =
-                        room.getHostId();
+            boolean hostStillPresent =
+                    room.getPlayers()
+                            .stream()
+                            .anyMatch(
+                                    p ->
+                                            p.getUserId()
+                                                    .equals(oldHost)
+                            );
 
-                boolean hostStillPresent =
+            if (!hostStillPresent) {
+
+                room.setHostId(
                         room.getPlayers()
-                                .stream()
-                                .anyMatch(
-                                        p ->
-                                                p.getUserId()
-                                                        .equals(oldHost)
-                                );
-
-                if (!hostStillPresent) {
-
-                    room.setHostId(
-                            room.getPlayers()
-                                    .get(0)
-                                    .getUserId()
-                    );
-                }
+                                .get(0)
+                                .getUserId()
+                );
             }
         }
 
         /*
          * ========================================================
-         * IMPORTANT: EMPTY ROOM
+         * ROOM STATUS
          * ========================================================
-         *
-         * If nobody remains, permanently remove the room and its
-         * persisted game state.
          */
-        if (room.getPlayers().isEmpty()) {
 
-            try {
-                states.deleteById(id);
-            } catch (Exception ignored) {
-            }
-
-            // Delete the room from MongoDB first
-            rooms.deleteById(id);
-
-            // Then tell all clients that this room no longer exists
-            ws.convertAndSend(
-                    "/topic/game/rooms/remove",
-                    id
-            );
-
-            return room;
-        }
-
-        /*
-         * Existing non-empty room handling.
-         */
         if (
                 room.getGameType() == GameType.LUDO &&
                         room.getStatus() == RoomStatus.PLAYING &&
@@ -595,9 +640,14 @@ public class GameService {
             );
         }
 
-        room.setUpdatedAt(Instant.now());
+        room.setUpdatedAt(
+                Instant.now()
+        );
 
-        return rooms.save(room);
+        GameRoom saved =
+                rooms.save(room);
+
+        return saved;
     }
 
 

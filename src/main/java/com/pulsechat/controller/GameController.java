@@ -2,6 +2,7 @@ package com.pulsechat.controller;
 import com.pulsechat.model.*;
 import com.pulsechat.repo.UserRepository;
 import com.pulsechat.service.GameService;
+import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.web.bind.annotation.*;
 import java.util.*;
@@ -25,39 +26,51 @@ public class GameController {
     }
 
     @PostMapping("/rooms/{id}/leave")
-    public GameRoom leave(
+    public ResponseEntity<?> leave(
             @PathVariable String id,
             org.springframework.security.core.Authentication a
     ) {
+
         GameRoom r = games.leave(u(a), id);
 
         /*
-         * If the room has no players left, GameService has deleted it.
-         * Do NOT broadcast the deleted room as an active room.
+         * Room was completely deleted.
          */
-        if (r.getPlayers() == null || r.getPlayers().isEmpty()) {
-            return r;
+        if (r == null) {
+
+            return ResponseEntity.ok(
+                    Map.of(
+                            "deleted", true,
+                            "roomId", id
+                    )
+            );
         }
 
         /*
-         * Room still exists, so notify players inside the room.
+         * Room still exists.
          */
-        ws.convertAndSend("/topic/game/" + id, r);
+        ws.convertAndSend(
+                "/topic/game/" + id,
+                r
+        );
 
         /*
-         * Ludo needs the updated state.
+         * Ludo needs updated state.
          */
         if (r.getGameType() == GameType.LUDO) {
+
             try {
+
                 ws.convertAndSend(
                         "/topic/game/" + id + "/state",
                         games.state(id)
                 );
+
             } catch (Exception ignored) {
             }
         }
 
-        return r;
+        return ResponseEntity.ok(r);
     }
 
     @GetMapping("/rooms/{id}/state") public GameState state(@PathVariable String id){return games.state(id);}
