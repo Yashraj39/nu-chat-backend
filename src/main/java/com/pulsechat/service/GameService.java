@@ -560,12 +560,14 @@ public class GameService {
             } catch (Exception ignored) {
             }
 
+            // Delete the room from MongoDB first
+            rooms.deleteById(id);
+
+            // Then tell all clients that this room no longer exists
             ws.convertAndSend(
                     "/topic/game/rooms/remove",
                     id
             );
-
-            rooms.deleteById(id);
 
             return room;
         }

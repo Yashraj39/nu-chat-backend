@@ -23,14 +23,43 @@ public class GameController {
         }
         return r;
     }
-    @PostMapping("/rooms/{id}/leave") public GameRoom leave(@PathVariable String id,org.springframework.security.core.Authentication a){
-        GameRoom r=games.leave(u(a),id);
-        ws.convertAndSend("/topic/game/"+id,r);
-        if (r.getGameType()==GameType.LUDO) {
-            try { ws.convertAndSend("/topic/game/"+id+"/state",games.state(id)); } catch (Exception ignored) {}
+
+    @PostMapping("/rooms/{id}/leave")
+    public GameRoom leave(
+            @PathVariable String id,
+            org.springframework.security.core.Authentication a
+    ) {
+        GameRoom r = games.leave(u(a), id);
+
+        /*
+         * If the room has no players left, GameService has deleted it.
+         * Do NOT broadcast the deleted room as an active room.
+         */
+        if (r.getPlayers() == null || r.getPlayers().isEmpty()) {
+            return r;
         }
+
+        /*
+         * Room still exists, so notify players inside the room.
+         */
+        ws.convertAndSend("/topic/game/" + id, r);
+
+        /*
+         * Ludo needs the updated state.
+         */
+        if (r.getGameType() == GameType.LUDO) {
+            try {
+                ws.convertAndSend(
+                        "/topic/game/" + id + "/state",
+                        games.state(id)
+                );
+            } catch (Exception ignored) {
+            }
+        }
+
         return r;
     }
+
     @GetMapping("/rooms/{id}/state") public GameState state(@PathVariable String id){return games.state(id);}
     @PostMapping("/rooms/{id}/action") public GameState action(@PathVariable String id,@RequestBody Map<String,Object>b,org.springframework.security.core.Authentication a){
         GameState s=games.genericAction(u(a),id,String.valueOf(b.get("action")),b.get("payload"));
