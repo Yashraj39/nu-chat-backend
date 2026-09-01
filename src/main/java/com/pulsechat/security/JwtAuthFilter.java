@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -34,45 +35,52 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             FilterChain chain
     ) throws ServletException, IOException {
 
-        // Allow CORS preflight requests to pass through
+        // Let CORS preflight pass without authentication.
         if ("OPTIONS".equalsIgnoreCase(req.getMethod())) {
             chain.doFilter(req, res);
             return;
         }
 
-        String h = req.getHeader("Authorization");
+        String header = req.getHeader("Authorization");
 
-        if (h != null && h.startsWith("Bearer ")) {
-
-            try {
-                var c = jwt.parse(h.substring(7));
-
-                var u = users.findById(c.getSubject()).orElse(null);
-
-                if (u != null) {
-
-                    var auth =
-                            new UsernamePasswordAuthenticationToken(
-                                    u.getId(),
-                                    null,
-                                    List.of(
-                                            new SimpleGrantedAuthority(
-                                                    "ROLE_" + u.getRole().name()
-                                            )
-                                    )
-                            );
-
-                    req.setAttribute("user", u);
-
-                    org.springframework.security.core.context.SecurityContextHolder
-                            .getContext()
-                            .setAuthentication(auth);
-                }
-
-            } catch (Exception ignored) {
-            }
+        // No token: let Spring Security decide whether this endpoint is public.
+        if (header == null || !header.startsWith("Bearer ")) {
+            chain.doFilter(req, res);
+            return;
         }
 
-        chain.doFilter(req, res);
+        try {
+            var claims = jwt.parse(header.substring(7));
+            var user = users.findById(claims.getSubject()).orElse(null);
+
+            // A syntactically valid JWT is not enough: the user must still exist.
+            if (user == null) {
+                SecurityContextHolder.clearContext();
+                res.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Authentication required.");
+                return;
+            }
+
+            var authentication = new UsernamePasswordAuthenticationToken(
+                    user.getId(),
+                    null,
+                    List.of(
+                            new SimpleGrantedAuthority(
+                                    "ROLE_" + user.getRole().name()
+                            )
+                    )
+            );
+
+            req.setAttribute("user", user);
+            SecurityContextHolder.getContext().setAuthentication(authentication);
+
+            chain.doFilter(req, res);
+
+        } catch (Exception ex) {
+            // Expired, malformed, or wrongly signed JWTs must be a clean 401.
+            // The frontend can then discard the stale session and ask the user
+            // to join again instead of remaining stuck on a reconnect loop.
+            SecurityContextHolder.clearContext();
+            res.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Authentication required.");
+        }
     }
 }
