@@ -51,7 +51,13 @@ public class ChatController {
             org.springframework.security.core.Authentication a
     ) {
         User u = user(a.getName());
-        Message m = messages.create(u, MessageType.TEXT, body.get("content"), null);
+        Message m = messages.create(
+                u,
+                MessageType.TEXT,
+                body.get("content"),
+                null,
+                body.get("replyToMessageId")
+        );
         ws.convertAndSend("/topic/chat", m);
         return m;
     }
@@ -89,7 +95,13 @@ public class ChatController {
                 .size(((Number) body.get("size")).longValue())
                 .build();
 
-        Message m = messages.create(u, t, null, fi);
+        Message m = messages.create(
+                u,
+                t,
+                null,
+                fi,
+                (String) body.get("replyToMessageId")
+        );
         ws.convertAndSend("/topic/chat", m);
         return m;
     }
