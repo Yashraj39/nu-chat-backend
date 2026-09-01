@@ -16,40 +16,39 @@ public class MessageService {
  public List<Message> latest(){var x=repo.findTop50ByOrderByCreatedAtDesc(); Collections.reverse(x); return x;}
 
  public Message create(User u, MessageType type,String content,Message.FileInfo file){
-   return create(u,type,content,file,null);
+   return create(u,type,content,file,null,null);
  }
 
  public Message create(User u, MessageType type,String content,Message.FileInfo file,String replyToMessageId){
+   return create(u,type,content,file,null,replyToMessageId);
+ }
+
+ public Message create(User u, MessageType type,String content,Message.FileInfo file,Message.MediaInfo media,String replyToMessageId){
    if(!limiter.allow("chat:"+u.getId(),30)) throw new IllegalStateException("Too many messages. Please slow down.");
    if(type==MessageType.TEXT){
      String c=content==null?"":content.trim();
      if(c.isBlank()||c.length()>2000) throw new IllegalArgumentException("Message must contain 1-2000 characters.");
      content=c;
+   } else if(type==MessageType.GIF || type==MessageType.STICKER){
+     if(media==null || media.getUrl()==null || media.getUrl().isBlank()) throw new IllegalArgumentException("Media metadata is required.");
+     content = null;
    } else if(file==null) throw new IllegalArgumentException("File metadata is required.");
 
    Message.ReplyReference replyTo = null;
    if(replyToMessageId != null && !replyToMessageId.isBlank()) {
      Message original = repo.findById(replyToMessageId.trim())
          .orElseThrow(() -> new NoSuchElementException("The message you are replying to no longer exists."));
-
      String previewContent = original.getContent();
      String fileName = original.getFile() != null ? original.getFile().getOriginalName() : null;
      String mimeType = original.getFile() != null ? original.getFile().getMimeType() : null;
-
      replyTo = Message.ReplyReference.builder()
-         .messageId(original.getId())
-         .senderId(original.getSenderId())
-         .senderName(original.getSenderName())
-         .type(original.getType())
-         .content(previewContent)
-         .fileName(fileName)
-         .mimeType(mimeType)
-         .deleted(original.isDeleted())
-         .build();
+         .messageId(original.getId()).senderId(original.getSenderId()).senderName(original.getSenderName())
+         .type(original.getType()).content(previewContent).fileName(fileName).mimeType(mimeType)
+         .deleted(original.isDeleted()).build();
    }
 
    Message m=Message.builder().senderId(u.getId()).senderName(u.getDisplayName()).type(type).content(content)
-       .file(file).replyTo(replyTo).deleted(false).createdAt(Instant.now()).build();
+       .file(file).media(media).replyTo(replyTo).deleted(false).createdAt(Instant.now()).build();
    repo.save(m); trim();
    return m;
  }
@@ -60,6 +59,6 @@ public class MessageService {
  public Message delete(User actor,String id){
    Message m=repo.findById(id).orElseThrow(()->new NoSuchElementException("Message not found."));
    if(!actor.getId().equals(m.getSenderId()) && actor.getRole()!=Role.ADMIN) throw new SecurityException("You are not allowed to delete this message.");
-   m.setDeleted(true);m.setDeletedAt(Instant.now());m.setContent(null);m.setFile(null);return repo.save(m);
+   m.setDeleted(true);m.setDeletedAt(Instant.now());m.setContent(null);m.setFile(null);m.setMedia(null);return repo.save(m);
  }
 }
