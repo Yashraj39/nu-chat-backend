@@ -15,15 +15,8 @@ public class Message {
     private MessageType type;
     private String content;
     private FileInfo file;
-
-    /**
-     * Snapshot of the message this message is replying to.
-     * Keeping a snapshot means the reply UI does not depend on a second
-     * database lookup and still has useful context if the original changes
-     * or is deleted later.
-     */
+    private MediaInfo media;
     private ReplyReference replyTo;
-
     @Indexed private boolean deleted;
     private Instant deletedAt;
     @Indexed private Instant createdAt;
@@ -35,6 +28,17 @@ public class Message {
         private String originalName;
         private String mimeType;
         private long size;
+    }
+
+    @Data @Builder @NoArgsConstructor @AllArgsConstructor
+    public static class MediaInfo {
+        private String provider;
+        private String providerId;
+        private String title;
+        private String url;
+        private String previewUrl;
+        private int width;
+        private int height;
     }
 
     @Data @Builder @NoArgsConstructor @AllArgsConstructor
