@@ -83,16 +83,28 @@ public class ChatController {
             org.springframework.security.core.Authentication a
     ) {
         User u = user(a.getName());
-        MessageType t = String.valueOf(body.get("mimeType")).startsWith("image/")
-                ? MessageType.IMAGE
-                : MessageType.FILE;
+
+        MessageType t;
+        String requestedType = String.valueOf(body.getOrDefault("type", ""));
+
+        if ("GIF".equalsIgnoreCase(requestedType)) {
+            t = MessageType.GIF;
+        } else if ("STICKER".equalsIgnoreCase(requestedType)) {
+            t = MessageType.STICKER;
+        } else {
+            t = String.valueOf(body.get("mimeType")).startsWith("image/")
+                    ? MessageType.IMAGE
+                    : MessageType.FILE;
+        }
 
         var fi = Message.FileInfo.builder()
                 .url((String) body.get("url"))
                 .publicId((String) body.get("publicId"))
                 .originalName((String) body.get("originalName"))
                 .mimeType((String) body.get("mimeType"))
-                .size(((Number) body.get("size")).longValue())
+                .size(body.get("size") instanceof Number
+                        ? ((Number) body.get("size")).longValue()
+                        : 0L)
                 .build();
 
         Message m = messages.create(
