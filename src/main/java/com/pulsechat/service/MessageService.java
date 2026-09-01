@@ -4,7 +4,6 @@ import com.pulsechat.model.*;
 import com.pulsechat.repo.MessageRepository;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.*;
 import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.*;
@@ -15,15 +14,42 @@ public class MessageService {
  public MessageService(MessageRepository r,MongoTemplate m,RateLimiter l){repo=r;mongo=m;limiter=l;}
 
  public List<Message> latest(){var x=repo.findTop50ByOrderByCreatedAtDesc(); Collections.reverse(x); return x;}
+
  public Message create(User u, MessageType type,String content,Message.FileInfo file){
+   return create(u,type,content,file,null);
+ }
+
+ public Message create(User u, MessageType type,String content,Message.FileInfo file,String replyToMessageId){
    if(!limiter.allow("chat:"+u.getId(),30)) throw new IllegalStateException("Too many messages. Please slow down.");
    if(type==MessageType.TEXT){
      String c=content==null?"":content.trim();
      if(c.isBlank()||c.length()>2000) throw new IllegalArgumentException("Message must contain 1-2000 characters.");
      content=c;
    } else if(file==null) throw new IllegalArgumentException("File metadata is required.");
+
+   Message.ReplyReference replyTo = null;
+   if(replyToMessageId != null && !replyToMessageId.isBlank()) {
+     Message original = repo.findById(replyToMessageId.trim())
+         .orElseThrow(() -> new NoSuchElementException("The message you are replying to no longer exists."));
+
+     String previewContent = original.getContent();
+     String fileName = original.getFile() != null ? original.getFile().getOriginalName() : null;
+     String mimeType = original.getFile() != null ? original.getFile().getMimeType() : null;
+
+     replyTo = Message.ReplyReference.builder()
+         .messageId(original.getId())
+         .senderId(original.getSenderId())
+         .senderName(original.getSenderName())
+         .type(original.getType())
+         .content(previewContent)
+         .fileName(fileName)
+         .mimeType(mimeType)
+         .deleted(original.isDeleted())
+         .build();
+   }
+
    Message m=Message.builder().senderId(u.getId()).senderName(u.getDisplayName()).type(type).content(content)
-       .file(file).deleted(false).createdAt(Instant.now()).build();
+       .file(file).replyTo(replyTo).deleted(false).createdAt(Instant.now()).build();
    repo.save(m); trim();
    return m;
  }
