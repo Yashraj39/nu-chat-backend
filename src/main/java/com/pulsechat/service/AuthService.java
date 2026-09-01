@@ -66,13 +66,12 @@ public class AuthService {
         repo.save(u);
 
         try {
-            activeNames.saveAndFlush(ActiveName.builder()
+            activeNames.save(ActiveName.builder()
                     .nameKey(nameKey)
                     .userId(u.getId())
                     .expiresAt(expiresAt)
                     .build());
         } catch (DuplicateKeyException e) {
-            // Do not leave an orphaned user when the name was claimed concurrently.
             repo.deleteById(u.getId());
             throw new NameTakenException("The name \"" + name + "\" is already in use. Please choose another name.");
         }
@@ -101,7 +100,7 @@ public class AuthService {
                 },
                 () -> {
                     try {
-                        activeNames.saveAndFlush(ActiveName.builder()
+                        activeNames.save(ActiveName.builder()
                                 .nameKey(key)
                                 .userId(u.getId())
                                 .expiresAt(now.plusSeconds(NAME_LEASE_SECONDS))
