@@ -1,6 +1,7 @@
 package com.pulsechat.config;
 
 import com.pulsechat.model.ActiveName;
+import com.pulsechat.model.SavedMedia;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -8,7 +9,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.index.Index;
-import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.index.CompoundIndexDefinition;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -28,7 +29,12 @@ public class MongoIndexConfig {
     }
 
     @EventListener(ApplicationReadyEvent.class)
-    public void ensureActiveNameIndexes() {
+    public void ensureIndexes() {
+        ensureActiveNameIndexes();
+        ensureSavedMediaIndexes();
+    }
+
+    private void ensureActiveNameIndexes() {
         cleanupActiveNameDuplicates();
 
         mongoTemplate.indexOps(ActiveName.class)
@@ -42,6 +48,21 @@ public class MongoIndexConfig {
                         .on("expiresAt", Sort.Direction.ASC)
                         .expire(0L)
                         .named("ttl_active_names_expires_at"));
+    }
+
+    private void ensureSavedMediaIndexes() {
+        mongoTemplate.indexOps(SavedMedia.class)
+                .ensureIndex(new CompoundIndexDefinition(
+                        new org.bson.Document("senderId", 1).append("url", 1))
+                        .unique()
+                        .named("ux_saved_media_sender_url"));
+
+        mongoTemplate.indexOps(SavedMedia.class)
+                .ensureIndex(new Index()
+                        .on("senderId", Sort.Direction.ASC)
+                        .on("sentCount", Sort.Direction.DESC)
+                        .on("lastSentAt", Sort.Direction.DESC)
+                        .named("idx_saved_media_sender_usage"));
     }
 
     private void cleanupActiveNameDuplicates() {
@@ -71,7 +92,6 @@ public class MongoIndexConfig {
                 removed++;
             }
 
-            // Expired reservations should not block a name when the unique index is created.
             if (keeper.getExpiresAt() == null || !keeper.getExpiresAt().isAfter(now)) {
                 mongoTemplate.remove(keeper);
                 removed++;
