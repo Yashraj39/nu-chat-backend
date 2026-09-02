@@ -37,6 +37,7 @@ public class Message {
         private String title;
         private String url;
         private String previewUrl;
+        private String mimeType;
         private int width;
         private int height;
     }
