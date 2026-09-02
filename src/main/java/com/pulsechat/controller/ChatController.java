@@ -72,16 +72,12 @@ public class ChatController {
 
         if(media!=null) {
             savedMedia.recordSent(u, t.name(), media.getProvider(), media.getProviderId(), media.getTitle(),
-                    media.getUrl(), media.getPreviewUrl(), media.getMimeType(), media.getWidth(), media.getHeight());
+                    media.getUrl(), media.getPreviewUrl(), null, media.getMimeType(), media.getWidth(), media.getHeight());
         }
 
         ws.convertAndSend("/topic/chat",m); return m;
     }
 
-    /**
-     * Imports a public remote image/GIF/video into Cloudinary before sending it.
-     * This keeps the college/lab browser independent of the original media host.
-     */
     @PostMapping("/media/link")
     public Message linkMedia(@RequestBody Map<String,Object> body, org.springframework.security.core.Authentication a) throws Exception {
         User u=user(a.getName());
@@ -113,22 +109,24 @@ public class ChatController {
             message=messages.create(u, "STICKER".equals(requestedType) ? MessageType.STICKER : MessageType.GIF,
                     null, null, media, replyToMessageId);
             kind=message.getType().name();
+            savedMedia.recordSent(u, kind, provider, providerId, title, remote.url(), remote.url(),
+                    remote.publicId(), remote.mimeType(), remote.width(), remote.height());
         } else if(remoteImage) {
             Message.FileInfo fi=Message.FileInfo.builder()
                     .url(remote.url()).publicId(remote.publicId()).originalName(remote.originalName())
                     .mimeType(remote.mimeType()).size(remote.size()).build();
             message=messages.create(u, MessageType.IMAGE, null, fi, replyToMessageId);
-            kind="IMAGE";
+            savedMedia.recordSent(u, "IMAGE", provider, providerId, remote.originalName(), remote.url(), remote.url(),
+                    remote.publicId(), remote.mimeType(), remote.width(), remote.height());
         } else {
             Message.FileInfo fi=Message.FileInfo.builder()
                     .url(remote.url()).publicId(remote.publicId()).originalName(remote.originalName())
                     .mimeType(remote.mimeType()).size(remote.size()).build();
             message=messages.create(u, MessageType.FILE, null, fi, replyToMessageId);
-            kind="VIDEO";
+            savedMedia.recordSent(u, "VIDEO", provider, providerId, remote.originalName(), remote.url(), remote.url(),
+                    remote.publicId(), remote.mimeType(), remote.width(), remote.height());
         }
 
-        savedMedia.recordSent(u, kind, provider, providerId, title, remote.url(), remote.url(),
-                remote.mimeType(), remote.width(), remote.height());
         ws.convertAndSend("/topic/chat",message);
         return message;
     }
@@ -155,13 +153,13 @@ public class ChatController {
         } else {
             MessageType type="IMAGE".equals(item.getKind()) ? MessageType.IMAGE : MessageType.FILE;
             Message.FileInfo fi=Message.FileInfo.builder()
-                    .url(item.getUrl()).publicId(null).originalName(item.getTitle() == null ? "linked-media" : item.getTitle())
+                    .url(item.getUrl()).publicId(item.getPublicId()).originalName(item.getTitle() == null ? "linked-media" : item.getTitle())
                     .mimeType(item.getMimeType()).size(0L).build();
             message=messages.create(u, type, null, fi, replyToMessageId);
         }
 
         savedMedia.recordSent(u, item.getKind(), item.getProvider(), item.getProviderId(), item.getTitle(),
-                item.getUrl(), item.getPreviewUrl(), item.getMimeType(), item.getWidth(), item.getHeight());
+                item.getUrl(), item.getPreviewUrl(), item.getPublicId(), item.getMimeType(), item.getWidth(), item.getHeight());
         ws.convertAndSend("/topic/chat",message);
         return message;
     }
