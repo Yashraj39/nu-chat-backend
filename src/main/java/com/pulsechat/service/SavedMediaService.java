@@ -24,8 +24,8 @@ public class SavedMediaService {
     }
 
     public void recordSent(User user, String kind, String provider, String providerId,
-                           String title, String url, String previewUrl, String mimeType,
-                           int width, int height) {
+                           String title, String url, String previewUrl, String publicId,
+                           String mimeType, int width, int height) {
         if (user == null || url == null || url.isBlank()) return;
 
         String normalizedUrl = url.trim();
@@ -39,6 +39,7 @@ public class SavedMediaService {
                         .title(title)
                         .url(normalizedUrl)
                         .previewUrl(previewUrl)
+                        .publicId(publicId)
                         .mimeType(mimeType)
                         .width(width)
                         .height(height)
@@ -52,6 +53,7 @@ public class SavedMediaService {
         item.setProviderId(providerId);
         item.setTitle(title);
         item.setPreviewUrl(previewUrl == null || previewUrl.isBlank() ? normalizedUrl : previewUrl);
+        item.setPublicId(publicId == null || publicId.isBlank() ? item.getPublicId() : publicId);
         item.setMimeType(mimeType);
         item.setWidth(width);
         item.setHeight(height);
@@ -98,6 +100,7 @@ public class SavedMediaService {
                     .title(media.getTitle())
                     .url(media.getUrl())
                     .previewUrl(media.getPreviewUrl())
+                    .publicId(null)
                     .mimeType(media.getMimeType())
                     .width(media.getWidth())
                     .height(media.getHeight())
