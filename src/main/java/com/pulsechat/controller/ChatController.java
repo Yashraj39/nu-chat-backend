@@ -8,6 +8,7 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.net.URI;
 import java.util.*;
 
 @RestController
@@ -78,8 +79,13 @@ public class ChatController {
         ws.convertAndSend("/topic/chat",m); return m;
     }
 
+    /**
+     * Stores a direct external media URL exactly as supplied by the user.
+     * No proxy, download, Cloudinary import, or server-side media request is performed.
+     * The browser loads the URL directly when displaying the message.
+     */
     @PostMapping("/media/link")
-    public Message linkMedia(@RequestBody Map<String,Object> body, org.springframework.security.core.Authentication a) throws Exception {
+    public Message linkMedia(@RequestBody Map<String,Object> body, org.springframework.security.core.Authentication a) {
         User u=user(a.getName());
         String sourceUrl=String.valueOf(body.getOrDefault("url", "")).trim();
         String requestedType=String.valueOf(body.getOrDefault("type", "")).trim().toUpperCase(Locale.ROOT);
@@ -88,44 +94,37 @@ public class ChatController {
         String title=body.get("title") == null ? null : String.valueOf(body.get("title"));
         String replyToMessageId=body.get("replyToMessageId") == null ? null : String.valueOf(body.get("replyToMessageId"));
 
-        if(sourceUrl.isBlank()) throw new IllegalArgumentException("Please provide an image, GIF, or video link.");
-        if(!requestedType.isBlank() && !requestedType.equals("GIF") && !requestedType.equals("STICKER")) {
-            throw new IllegalArgumentException("Unsupported media type.");
-        }
+        validateHttpUrl(sourceUrl);
 
-        var remote=cloud.uploadRemoteUrl(sourceUrl);
-        boolean remoteImage="image".equalsIgnoreCase(remote.resourceType());
-        boolean inferredGif=remoteImage && "gif".equalsIgnoreCase(remote.format());
-        if("STICKER".equals(requestedType) || "GIF".equals(requestedType)) {
-            if(!remoteImage) throw new IllegalArgumentException("GIFs and stickers must be image/GIF links.");
+        String lowerUrl=sourceUrl.toLowerCase(Locale.ROOT);
+        String kind=requestedType;
+        if(kind.isBlank()) {
+            if(looksLikeGif(lowerUrl)) kind="GIF";
+            else if(looksLikeImage(lowerUrl)) kind="IMAGE";
+            else if(looksLikeVideo(lowerUrl)) kind="VIDEO";
+            else throw new IllegalArgumentException("Use a direct image, GIF, or video URL ending in a supported media extension.");
         }
 
         Message message;
-        String kind;
-        if("STICKER".equals(requestedType) || "GIF".equals(requestedType) || (requestedType.isBlank() && inferredGif)) {
-            MessageType type="STICKER".equals(requestedType) ? MessageType.STICKER : MessageType.GIF;
+        if("GIF".equals(kind) || "STICKER".equals(kind)) {
+            String mime="GIF".equals(kind) ? "image/gif" : inferImageMime(lowerUrl);
             Message.MediaInfo media=Message.MediaInfo.builder()
                     .provider(provider).providerId(providerId).title(title)
-                    .url(remote.url()).previewUrl(remote.url()).mimeType(remote.mimeType())
-                    .width(remote.width()).height(remote.height()).build();
-            message=messages.create(u, type, null, null, media, replyToMessageId);
-            kind=message.getType().name();
-            savedMedia.recordSent(u, kind, provider, providerId, title, remote.url(), remote.url(),
-                    remote.publicId(), remote.mimeType(), remote.width(), remote.height());
-        } else if(remoteImage) {
-            Message.FileInfo fi=Message.FileInfo.builder()
-                    .url(remote.url()).publicId(remote.publicId()).originalName(remote.originalName())
-                    .mimeType(remote.mimeType()).size(remote.size()).build();
-            message=messages.create(u, MessageType.IMAGE, null, fi, replyToMessageId);
-            savedMedia.recordSent(u, "IMAGE", provider, providerId, remote.originalName(), remote.url(), remote.url(),
-                    remote.publicId(), remote.mimeType(), remote.width(), remote.height());
+                    .url(sourceUrl).previewUrl(sourceUrl).mimeType(mime).build();
+            message=messages.create(u, "STICKER".equals(kind) ? MessageType.STICKER : MessageType.GIF,
+                    null, null, media, replyToMessageId);
+            savedMedia.recordSent(u, kind, provider, providerId, title, sourceUrl, sourceUrl, null, mime, 0, 0);
         } else {
+            String mime="IMAGE".equals(kind) ? inferImageMime(lowerUrl) : inferVideoMime(lowerUrl);
+            String originalName=extractName(sourceUrl);
             Message.FileInfo fi=Message.FileInfo.builder()
-                    .url(remote.url()).publicId(remote.publicId()).originalName(remote.originalName())
-                    .mimeType(remote.mimeType()).size(remote.size()).build();
-            message=messages.create(u, MessageType.FILE, null, fi, replyToMessageId);
-            savedMedia.recordSent(u, "VIDEO", provider, providerId, remote.originalName(), remote.url(), remote.url(),
-                    remote.publicId(), remote.mimeType(), remote.width(), remote.height());
+                    .url(sourceUrl).publicId(null).originalName(originalName)
+                    .mimeType(mime).size(0L).build();
+            message=messages.create(u, "IMAGE".equals(kind) ? MessageType.IMAGE : MessageType.FILE,
+                    null, fi, replyToMessageId);
+            savedMedia.recordSent(u, kind, provider, providerId,
+                    title == null || title.isBlank() ? originalName : title,
+                    sourceUrl, sourceUrl, null, mime, 0, 0);
         }
 
         ws.convertAndSend("/topic/chat",message);
@@ -175,5 +174,63 @@ public class ChatController {
     @DeleteMapping("/messages/{id}")
     public Message delete(@PathVariable String id, org.springframework.security.core.Authentication a) {
         Message m=messages.delete(user(a.getName()),id); ws.convertAndSend("/topic/chat",m); return m;
+    }
+
+    private void validateHttpUrl(String sourceUrl) {
+        if(sourceUrl.isBlank() || sourceUrl.length()>2048) throw new IllegalArgumentException("Please provide a valid media URL.");
+        try {
+            URI uri=URI.create(sourceUrl);
+            String scheme=uri.getScheme();
+            if(!("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) || uri.getHost()==null || uri.getHost().isBlank()) {
+                throw new IllegalArgumentException();
+            }
+        } catch(Exception e) {
+            throw new IllegalArgumentException("Only valid HTTP/HTTPS media URLs are supported.");
+        }
+    }
+
+    private boolean looksLikeGif(String url) { return extension(url).equals("gif"); }
+    private boolean looksLikeImage(String url) { return Set.of("jpg","jpeg","png","webp","bmp","avif","svg").contains(extension(url)); }
+    private boolean looksLikeVideo(String url) { return Set.of("mp4","webm","mov","m4v","ogg").contains(extension(url)); }
+
+    private String inferImageMime(String url) {
+        String e=extension(url);
+        if("jpg".equals(e) || "jpeg".equals(e)) return "image/jpeg";
+        if("png".equals(e)) return "image/png";
+        if("webp".equals(e)) return "image/webp";
+        if("bmp".equals(e)) return "image/bmp";
+        if("avif".equals(e)) return "image/avif";
+        if("svg".equals(e)) return "image/svg+xml";
+        return "image/*";
+    }
+
+    private String inferVideoMime(String url) {
+        String e=extension(url);
+        if("webm".equals(e)) return "video/webm";
+        if("mov".equals(e)) return "video/quicktime";
+        if("ogg".equals(e)) return "video/ogg";
+        return "video/mp4";
+    }
+
+    private String extension(String url) {
+        try {
+            String path=URI.create(url).getPath();
+            if(path==null) return "";
+            int slash=path.lastIndexOf('/');
+            String name=slash>=0 ? path.substring(slash+1) : path;
+            int dot=name.lastIndexOf('.');
+            return dot>=0 ? name.substring(dot+1).toLowerCase(Locale.ROOT) : "";
+        } catch(Exception e) { return ""; }
+    }
+
+    private String extractName(String url) {
+        try {
+            String path=URI.create(url).getPath();
+            if(path!=null && !path.isBlank()) {
+                String name=path.substring(path.lastIndexOf('/')+1);
+                if(!name.isBlank()) return name;
+            }
+        } catch(Exception ignored) {}
+        return "linked-media";
     }
 }
