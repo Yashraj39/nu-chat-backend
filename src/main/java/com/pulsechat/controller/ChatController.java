@@ -16,14 +16,17 @@ public class ChatController {
     private final MessageService messages;
     private final CloudinaryService cloud;
     private final CloudinaryDownloadService downloads;
+    private final SavedMediaService savedMedia;
     private final MessageRepository messageRepo;
     private final UserRepository users;
     private final SimpMessagingTemplate ws;
 
     public ChatController(MessageService m, CloudinaryService c, CloudinaryDownloadService d,
-                          MessageRepository messageRepo, UserRepository u, SimpMessagingTemplate w) {
-        messages=m; cloud=c; downloads=d; this.messageRepo=messageRepo; users=u; ws=w;
+                          SavedMediaService sm, MessageRepository messageRepo, UserRepository u,
+                          SimpMessagingTemplate w) {
+        messages=m; cloud=c; downloads=d; savedMedia=sm; this.messageRepo=messageRepo; users=u; ws=w;
     }
+
     private User user(String id) { return users.findById(id).orElseThrow(); }
 
     @GetMapping("/messages")
@@ -57,6 +60,7 @@ public class ChatController {
                     .provider((String)body.get("provider")).providerId((String)body.get("providerId"))
                     .title((String)body.get("title")).url((String)body.get("url"))
                     .previewUrl((String)body.get("previewUrl"))
+                    .mimeType((String)body.get("mimeType"))
                     .width(body.get("width") instanceof Number ? ((Number)body.get("width")).intValue() : 0)
                     .height(body.get("height") instanceof Number ? ((Number)body.get("height")).intValue() : 0).build();
         } else {
@@ -65,7 +69,101 @@ public class ChatController {
                     .size(body.get("size") instanceof Number ? ((Number)body.get("size")).longValue() : 0L).build();
         }
         Message m=messages.create(u,t,null,fi,media,(String)body.get("replyToMessageId"));
+
+        if(media!=null) {
+            savedMedia.recordSent(u, t.name(), media.getProvider(), media.getProviderId(), media.getTitle(),
+                    media.getUrl(), media.getPreviewUrl(), media.getMimeType(), media.getWidth(), media.getHeight());
+        }
+
         ws.convertAndSend("/topic/chat",m); return m;
+    }
+
+    /**
+     * Imports a public remote image/GIF/video into Cloudinary before sending it.
+     * This keeps the college/lab browser independent of the original media host.
+     */
+    @PostMapping("/media/link")
+    public Message linkMedia(@RequestBody Map<String,Object> body, org.springframework.security.core.Authentication a) throws Exception {
+        User u=user(a.getName());
+        String sourceUrl=String.valueOf(body.getOrDefault("url", "")).trim();
+        String requestedType=String.valueOf(body.getOrDefault("type", "")).trim().toUpperCase(Locale.ROOT);
+        String provider=String.valueOf(body.getOrDefault("provider", "LINK"));
+        String providerId=body.get("providerId") == null ? null : String.valueOf(body.get("providerId"));
+        String title=body.get("title") == null ? null : String.valueOf(body.get("title"));
+        String replyToMessageId=body.get("replyToMessageId") == null ? null : String.valueOf(body.get("replyToMessageId"));
+
+        if(sourceUrl.isBlank()) throw new IllegalArgumentException("Please provide an image, GIF, or video link.");
+        if(!requestedType.isBlank() && !requestedType.equals("GIF") && !requestedType.equals("STICKER")) {
+            throw new IllegalArgumentException("Unsupported media type.");
+        }
+
+        var remote=cloud.uploadRemoteUrl(sourceUrl);
+        boolean remoteImage="image".equals(remote.resourceType());
+        if("STICKER".equals(requestedType) || "GIF".equals(requestedType)) {
+            if(!remoteImage) throw new IllegalArgumentException("GIFs and stickers must be image/GIF links.");
+        }
+
+        Message message;
+        String kind;
+        if("STICKER".equals(requestedType) || "GIF".equals(requestedType)) {
+            Message.MediaInfo media=Message.MediaInfo.builder()
+                    .provider(provider).providerId(providerId).title(title)
+                    .url(remote.url()).previewUrl(remote.url()).mimeType(remote.mimeType())
+                    .width(remote.width()).height(remote.height()).build();
+            message=messages.create(u, "STICKER".equals(requestedType) ? MessageType.STICKER : MessageType.GIF,
+                    null, null, media, replyToMessageId);
+            kind=message.getType().name();
+        } else if(remoteImage) {
+            Message.FileInfo fi=Message.FileInfo.builder()
+                    .url(remote.url()).publicId(remote.publicId()).originalName(remote.originalName())
+                    .mimeType(remote.mimeType()).size(remote.size()).build();
+            message=messages.create(u, MessageType.IMAGE, null, fi, replyToMessageId);
+            kind="IMAGE";
+        } else {
+            Message.FileInfo fi=Message.FileInfo.builder()
+                    .url(remote.url()).publicId(remote.publicId()).originalName(remote.originalName())
+                    .mimeType(remote.mimeType()).size(remote.size()).build();
+            message=messages.create(u, MessageType.FILE, null, fi, replyToMessageId);
+            kind="VIDEO";
+        }
+
+        savedMedia.recordSent(u, kind, provider, providerId, title, remote.url(), remote.url(),
+                remote.mimeType(), remote.width(), remote.height());
+        ws.convertAndSend("/topic/chat",message);
+        return message;
+    }
+
+    @GetMapping("/media/saved")
+    public List<SavedMedia> saved(org.springframework.security.core.Authentication a) {
+        return savedMedia.list(user(a.getName()));
+    }
+
+    @PostMapping("/media/saved/{id}/send")
+    public Message sendSaved(@PathVariable String id, @RequestBody(required=false) Map<String,Object> body,
+                             org.springframework.security.core.Authentication a) {
+        User u=user(a.getName());
+        SavedMedia item=savedMedia.getForUser(u,id);
+        String replyToMessageId=body == null || body.get("replyToMessageId") == null ? null : String.valueOf(body.get("replyToMessageId"));
+
+        Message message;
+        if("GIF".equals(item.getKind()) || "STICKER".equals(item.getKind())) {
+            Message.MediaInfo media=Message.MediaInfo.builder()
+                    .provider(item.getProvider()).providerId(item.getProviderId()).title(item.getTitle())
+                    .url(item.getUrl()).previewUrl(item.getPreviewUrl()).mimeType(item.getMimeType())
+                    .width(item.getWidth()).height(item.getHeight()).build();
+            message=messages.create(u, MessageType.valueOf(item.getKind()), null, null, media, replyToMessageId);
+        } else {
+            MessageType type="IMAGE".equals(item.getKind()) ? MessageType.IMAGE : MessageType.FILE;
+            Message.FileInfo fi=Message.FileInfo.builder()
+                    .url(item.getUrl()).publicId(null).originalName(item.getTitle() == null ? "linked-media" : item.getTitle())
+                    .mimeType(item.getMimeType()).size(0L).build();
+            message=messages.create(u, type, null, fi, replyToMessageId);
+        }
+
+        savedMedia.recordSent(u, item.getKind(), item.getProvider(), item.getProviderId(), item.getTitle(),
+                item.getUrl(), item.getPreviewUrl(), item.getMimeType(), item.getWidth(), item.getHeight());
+        ws.convertAndSend("/topic/chat",message);
+        return message;
     }
 
     @GetMapping("/files/{messageId}/download-url")
