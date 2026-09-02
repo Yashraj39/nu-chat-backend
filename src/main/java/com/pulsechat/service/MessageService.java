@@ -6,7 +6,6 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Service;
 
-import java.net.URI;
 import java.time.Instant;
 import java.util.*;
 
@@ -15,52 +14,15 @@ public class MessageService {
  private final MessageRepository repo;
  private final MongoTemplate mongo;
  private final RateLimiter limiter;
- private final CloudinaryService cloud;
 
- public MessageService(MessageRepository r, MongoTemplate m, RateLimiter l, CloudinaryService c){
-   repo=r;mongo=m;limiter=l;cloud=c;
+ public MessageService(MessageRepository r, MongoTemplate m, RateLimiter l){
+   repo=r;mongo=m;limiter=l;
  }
 
  public List<Message> latest(){
    var x=repo.findTop50ByOrderByCreatedAtDesc();
-   x.forEach(this::migrateLegacyMedia);
    Collections.reverse(x);
    return x;
- }
-
- private void migrateLegacyMedia(Message message){
-   if(message == null || message.isDeleted() || message.getMedia() == null) return;
-
-   Message.MediaInfo media=message.getMedia();
-   String url=media.getUrl();
-   String provider=media.getProvider();
-   if(url == null || url.isBlank()) return;
-
-   boolean legacyKlipy = "KLIPY".equalsIgnoreCase(provider) && !isCloudinaryUrl(url);
-   if(!legacyKlipy) return;
-
-   try {
-     var remote=cloud.uploadRemoteUrl(url);
-     if(!"image".equalsIgnoreCase(remote.resourceType())) return;
-
-     media.setUrl(remote.url());
-     media.setPreviewUrl(remote.url());
-     if(media.getMimeType() == null || media.getMimeType().isBlank()) media.setMimeType(remote.mimeType());
-     if(media.getWidth() <= 0) media.setWidth(remote.width());
-     if(media.getHeight() <= 0) media.setHeight(remote.height());
-     repo.save(message);
-   } catch(Exception ignored) {
-     // A media migration failure must never prevent the chat history from loading.
-   }
- }
-
- private boolean isCloudinaryUrl(String url){
-   try {
-     String host=URI.create(url).getHost();
-     return host != null && host.toLowerCase(Locale.ROOT).endsWith("res.cloudinary.com");
-   } catch(Exception e) {
-     return false;
-   }
  }
 
  public Message create(User u, MessageType type,String content,Message.FileInfo file){
