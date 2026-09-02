@@ -2,7 +2,6 @@ package com.pulsechat.model;
 
 import lombok.*;
 import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
@@ -12,7 +11,6 @@ import java.time.Instant;
 @NoArgsConstructor
 @AllArgsConstructor
 @Document("saved_media")
-@CompoundIndex(name = "sender_url_unique", def = "{'senderId': 1, 'url': 1}", unique = true)
 public class SavedMedia {
     @Id
     private String id;
