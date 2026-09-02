@@ -94,20 +94,21 @@ public class ChatController {
         }
 
         var remote=cloud.uploadRemoteUrl(sourceUrl);
-        boolean remoteImage="image".equals(remote.resourceType());
+        boolean remoteImage="image".equalsIgnoreCase(remote.resourceType());
+        boolean inferredGif=remoteImage && "gif".equalsIgnoreCase(remote.format());
         if("STICKER".equals(requestedType) || "GIF".equals(requestedType)) {
             if(!remoteImage) throw new IllegalArgumentException("GIFs and stickers must be image/GIF links.");
         }
 
         Message message;
         String kind;
-        if("STICKER".equals(requestedType) || "GIF".equals(requestedType)) {
+        if("STICKER".equals(requestedType) || "GIF".equals(requestedType) || (requestedType.isBlank() && inferredGif)) {
+            MessageType type="STICKER".equals(requestedType) ? MessageType.STICKER : MessageType.GIF;
             Message.MediaInfo media=Message.MediaInfo.builder()
                     .provider(provider).providerId(providerId).title(title)
                     .url(remote.url()).previewUrl(remote.url()).mimeType(remote.mimeType())
                     .width(remote.width()).height(remote.height()).build();
-            message=messages.create(u, "STICKER".equals(requestedType) ? MessageType.STICKER : MessageType.GIF,
-                    null, null, media, replyToMessageId);
+            message=messages.create(u, type, null, null, media, replyToMessageId);
             kind=message.getType().name();
             savedMedia.recordSent(u, kind, provider, providerId, title, remote.url(), remote.url(),
                     remote.publicId(), remote.mimeType(), remote.width(), remote.height());
