@@ -8,19 +8,21 @@ import com.pulsechat.repo.MessageRepository;
 import com.pulsechat.repo.SavedMediaRepository;
 import org.springframework.stereotype.Service;
 
+import java.net.URI;
 import java.time.Instant;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
 public class SavedMediaService {
     private final SavedMediaRepository repo;
     private final MessageRepository messages;
+    private final CloudinaryService cloud;
 
-    public SavedMediaService(SavedMediaRepository repo, MessageRepository messages) {
+    public SavedMediaService(SavedMediaRepository repo, MessageRepository messages, CloudinaryService cloud) {
         this.repo = repo;
         this.messages = messages;
+        this.cloud = cloud;
     }
 
     public void recordSent(User user, String kind, String provider, String providerId,
@@ -87,9 +89,30 @@ public class SavedMediaService {
 
         grouped.forEach((url, group) -> {
             Message latest = group.stream()
-                    .max(java.util.Comparator.comparing(Message::getCreatedAt))
+                    .max(Comparator.comparing(Message::getCreatedAt))
                     .orElse(group.get(0));
             Message.MediaInfo media = latest.getMedia();
+
+            String storedUrl = url;
+            String storedPreview = media.getPreviewUrl();
+            String storedPublicId = null;
+            String storedMime = media.getMimeType();
+            int storedWidth = media.getWidth();
+            int storedHeight = media.getHeight();
+
+            if ("KLIPY".equalsIgnoreCase(media.getProvider()) && !isCloudinaryUrl(url)) {
+                try {
+                    var remote = cloud.uploadRemoteUrl(url);
+                    storedUrl = remote.url();
+                    storedPreview = remote.url();
+                    storedPublicId = remote.publicId();
+                    if (storedMime == null || storedMime.isBlank()) storedMime = remote.mimeType();
+                    if (storedWidth <= 0) storedWidth = remote.width();
+                    if (storedHeight <= 0) storedHeight = remote.height();
+                } catch (Exception ignored) {
+                    // Keep the legacy URL as a fallback; one failed media must not break the library.
+                }
+            }
 
             SavedMedia item = SavedMedia.builder()
                     .senderId(user.getId())
@@ -98,17 +121,26 @@ public class SavedMediaService {
                     .provider(media.getProvider())
                     .providerId(media.getProviderId())
                     .title(media.getTitle())
-                    .url(media.getUrl())
-                    .previewUrl(media.getPreviewUrl())
-                    .publicId(null)
-                    .mimeType(media.getMimeType())
-                    .width(media.getWidth())
-                    .height(media.getHeight())
+                    .url(storedUrl)
+                    .previewUrl(storedPreview)
+                    .publicId(storedPublicId)
+                    .mimeType(storedMime)
+                    .width(storedWidth)
+                    .height(storedHeight)
                     .sentCount(group.size())
                     .createdAt(group.stream().map(Message::getCreatedAt).min(Instant::compareTo).orElse(Instant.now()))
                     .lastSentAt(latest.getCreatedAt())
                     .build();
             repo.save(item);
         });
+    }
+
+    private boolean isCloudinaryUrl(String url) {
+        try {
+            String host = URI.create(url).getHost();
+            return host != null && host.toLowerCase(Locale.ROOT).endsWith("res.cloudinary.com");
+        } catch (Exception e) {
+            return false;
+        }
     }
 }
