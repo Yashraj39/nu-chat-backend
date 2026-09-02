@@ -24,6 +24,7 @@ public class SavedMedia {
     private String title;
     private String url;
     private String previewUrl;
+    private String publicId;
     private String mimeType;
     private int width;
     private int height;
