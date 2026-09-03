@@ -48,7 +48,7 @@ public class ChatController {
     @GetMapping("/messages")
     public List<Message> latest(org.springframework.security.core.Authentication a, HttpServletRequest request) {
         List<Message> result=messages.latest();
-        result.forEach(m -> exposeFileProxy(m, request));
+        result.forEach(m -> { exposeFileProxy(m, request); exposeMediaProxy(m, request); });
         return result;
     }
 
@@ -93,6 +93,7 @@ public class ChatController {
         Message m=messages.create(u,t,null,fi,media,(String)body.get("replyToMessageId"));
 
         if(media!=null) {
+            exposeMediaProxy(m, request);
             savedMedia.recordSent(u, t.name(), media.getProvider(), media.getProviderId(), media.getTitle(),
                     media.getUrl(), media.getPreviewUrl(), null, media.getMimeType(), media.getWidth(), media.getHeight());
         } else {
@@ -103,7 +104,8 @@ public class ChatController {
     }
 
     @PostMapping("/media/link")
-    public Message linkMedia(@RequestBody Map<String,Object> body, org.springframework.security.core.Authentication a) {
+    public Message linkMedia(@RequestBody Map<String,Object> body, org.springframework.security.core.Authentication a,
+                              HttpServletRequest request) {
         User u=user(a.getName());
         String sourceUrl=String.valueOf(body.getOrDefault("url", "")).trim();
         String requestedType=String.valueOf(body.getOrDefault("type", "")).trim().toUpperCase(Locale.ROOT);
@@ -130,6 +132,7 @@ public class ChatController {
                     .url(sourceUrl).previewUrl(sourceUrl).mimeType(mime).build();
             message=messages.create(u, "STICKER".equals(kind) ? MessageType.STICKER : MessageType.GIF,
                     null, null, media, replyToMessageId);
+            exposeMediaProxy(message, request);
             savedMedia.recordSent(u, kind, provider, providerId, title, sourceUrl, sourceUrl, null, mime, 0, 0);
         } else {
             String mime="IMAGE".equals(kind) ? inferImageMime(lowerUrl) : inferVideoMime(lowerUrl);
@@ -139,6 +142,7 @@ public class ChatController {
                     .mimeType(mime).size(0L).build();
             message=messages.create(u, "IMAGE".equals(kind) ? MessageType.IMAGE : MessageType.FILE,
                     null, fi, replyToMessageId);
+            exposeFileProxy(message, request);
             savedMedia.recordSent(u, kind, provider, providerId,
                     title == null || title.isBlank() ? originalName : title,
                     sourceUrl, sourceUrl, null, mime, 0, 0);
@@ -169,6 +173,7 @@ public class ChatController {
                     .url(item.getUrl()).previewUrl(item.getPreviewUrl()).mimeType(item.getMimeType())
                     .width(item.getWidth()).height(item.getHeight()).build();
             message=messages.create(u, MessageType.valueOf(item.getKind()), null, null, media, replyToMessageId);
+            exposeMediaProxy(message, request);
         } else {
             MessageType type="IMAGE".equals(item.getKind()) ? MessageType.IMAGE : MessageType.FILE;
             Message.FileInfo fi=Message.FileInfo.builder()
@@ -182,6 +187,60 @@ public class ChatController {
                 item.getUrl(), item.getPreviewUrl(), item.getPublicId(), item.getMimeType(), item.getWidth(), item.getHeight());
         ws.convertAndSend("/topic/chat",message);
         return message;
+    }
+
+    /**
+     * Streams an imported GIF/sticker through Render so the browser never
+     * contacts Cloudinary directly. Sent GIFs are normalized to Cloudinary by
+     * MessageService before being saved as messages.
+     */
+    @GetMapping("/media/content/{messageId}")
+    public ResponseEntity<StreamingResponseBody> mediaContent(@PathVariable String messageId) throws Exception {
+        Message message=messageRepo.findById(messageId).orElseThrow(()->new NoSuchElementException("Media not found."));
+        if(message.isDeleted() || message.getMedia()==null || message.getMedia().getUrl()==null || message.getMedia().getUrl().isBlank()) {
+            throw new NoSuchElementException("Media not found.");
+        }
+
+        String cloudinaryUrl=message.getMedia().getUrl().trim();
+        URI uri=URI.create(cloudinaryUrl);
+        String host=uri.getHost();
+        if(host==null || !host.toLowerCase(Locale.ROOT).endsWith("res.cloudinary.com")) {
+            throw new IllegalArgumentException("Media proxy only supports stored Cloudinary media.");
+        }
+
+        HttpURLConnection connection=(HttpURLConnection)new URL(cloudinaryUrl).openConnection();
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(15000);
+        connection.setReadTimeout(60000);
+        connection.setInstanceFollowRedirects(true);
+
+        int status=connection.getResponseCode();
+        if(status < 200 || status >= 300) {
+            connection.disconnect();
+            throw new IOException("Cloudinary returned HTTP " + status + ".");
+        }
+
+        String contentType=message.getMedia().getMimeType();
+        if(contentType==null || contentType.isBlank()) contentType=connection.getContentType();
+        if(contentType==null || contentType.isBlank()) contentType="application/octet-stream";
+        long length=connection.getContentLengthLong();
+
+        StreamingResponseBody stream=output -> {
+            try(InputStream input=connection.getInputStream()) {
+                byte[] buffer=new byte[16 * 1024];
+                int read;
+                while((read=input.read(buffer))!=-1) output.write(buffer,0,read);
+                output.flush();
+            } finally {
+                connection.disconnect();
+            }
+        };
+
+        ResponseEntity.BodyBuilder builder=ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(contentType))
+                .header(HttpHeaders.CACHE_CONTROL, "private, max-age=300");
+        if(length>=0) builder.contentLength(length);
+        return builder.body(stream);
     }
 
     @GetMapping("/files/{messageId}/download-url")
@@ -259,6 +318,29 @@ public class ChatController {
         String publicId=message.getFile().getPublicId();
         if(publicId==null || publicId.isBlank()) return;
         message.getFile().setUrl(proxyUrl(publicId, false, request));
+    }
+
+    private void exposeMediaProxy(Message message, HttpServletRequest request) {
+        if(message==null || message.getMedia()==null) return;
+        String url=message.getMedia().getUrl();
+        if(url==null || url.isBlank()) return;
+        try {
+            URI uri=URI.create(url.trim());
+            String host=uri.getHost();
+            if(host!=null && host.toLowerCase(Locale.ROOT).endsWith("res.cloudinary.com")) {
+                message.getMedia().setUrl(mediaProxyUrl(message.getId(), request));
+                if(message.getMedia().getPreviewUrl()!=null && !message.getMedia().getPreviewUrl().isBlank()) {
+                    message.getMedia().setPreviewUrl(mediaProxyUrl(message.getId(), request));
+                }
+            }
+        } catch(Exception ignored) {
+        }
+    }
+
+    private String mediaProxyUrl(String messageId, HttpServletRequest request) {
+        String base=request.getScheme()+"://"+request.getServerName();
+        if(request.getServerPort()!=80 && request.getServerPort()!=443) base += ":"+request.getServerPort();
+        return base+"/api/media/content/"+URLEncoder.encode(messageId, StandardCharsets.UTF_8);
     }
 
     private String proxyUrl(String publicId, boolean download, HttpServletRequest request) {
