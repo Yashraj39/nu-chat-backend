@@ -10,5 +10,6 @@ import java.util.List;
 public interface MessageRepository extends MongoRepository<Message,String> {
     List<Message> findTop50ByOrderByCreatedAtDesc();
     List<Message> findBySenderIdAndTypeIn(String senderId, Collection<MessageType> types);
+    List<Message> findByTypeIn(Collection<MessageType> types);
     long countByDeletedFalse();
 }
