@@ -30,6 +30,12 @@ public class ChatController {
 
     private User user(String id) { return users.findById(id).orElseThrow(); }
 
+    private void ensureGlobalMediaHistory() {
+        // Legacy GIF/sticker records used to be stored per user. Import them
+        // once into the shared library before the first global listing.
+        savedMedia.backfillLegacyHistory();
+    }
+
     @GetMapping("/messages")
     public List<Message> latest(org.springframework.security.core.Authentication a) { return messages.latest(); }
 
@@ -133,14 +139,16 @@ public class ChatController {
 
     @GetMapping("/media/saved")
     public List<SavedMedia> saved(org.springframework.security.core.Authentication a) {
-        return savedMedia.list(user(a.getName()));
+        ensureGlobalMediaHistory();
+        return savedMedia.list();
     }
 
     @PostMapping("/media/saved/{id}/send")
     public Message sendSaved(@PathVariable String id, @RequestBody(required=false) Map<String,Object> body,
                              org.springframework.security.core.Authentication a) {
         User u=user(a.getName());
-        SavedMedia item=savedMedia.getForUser(u,id);
+        ensureGlobalMediaHistory();
+        SavedMedia item=savedMedia.get(id);
         String replyToMessageId=body == null || body.get("replyToMessageId") == null ? null : String.valueOf(body.get("replyToMessageId"));
 
         Message message;
