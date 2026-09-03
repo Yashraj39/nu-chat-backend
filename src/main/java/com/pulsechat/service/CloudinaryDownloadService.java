@@ -1,6 +1,7 @@
 package com.pulsechat.service;
 
 import com.cloudinary.Cloudinary;
+import com.cloudinary.Url;
 import com.cloudinary.utils.ObjectUtils;
 import com.pulsechat.model.Message;
 import org.springframework.beans.factory.annotation.Value;
@@ -29,9 +30,9 @@ public class CloudinaryDownloadService {
     }
 
     /**
-     * Creates a server-to-server Cloudinary delivery URL.
-     * The browser never receives this URL; ChatController fetches it from
-     * Render and streams the bytes to the client through /api/files/content.
+     * Creates a signed Cloudinary delivery URL on the backend.
+     * The browser should never receive this URL directly; ChatController
+     * fetches it from Render and streams the bytes through the backend proxy.
      */
     public String createDownloadUrl(Message.FileInfo file) {
         if (cloud == null) {
@@ -45,15 +46,17 @@ public class CloudinaryDownloadService {
         String deliveryType = resolveDeliveryType(file.getUrl());
         String format = resolveFormat(file.getOriginalName(), file.getPublicId());
 
-        // sign_url makes private/authenticated resources accessible to the
-        // backend without exposing Cloudinary credentials to the browser.
-        return cloud.url(file.getPublicId(), ObjectUtils.asMap(
-                "secure", true,
-                "resource_type", resourceType,
-                "type", deliveryType,
-                "sign_url", true,
-                "format", format
-        ));
+        Url url = cloud.url()
+                .secure(true)
+                .resourceType(resourceType)
+                .type(deliveryType)
+                .signed(true);
+
+        if (format != null && !format.isBlank()) {
+            url.format(format);
+        }
+
+        return url.generate(file.getPublicId());
     }
 
     private String resolveDeliveryType(String storedUrl) {
