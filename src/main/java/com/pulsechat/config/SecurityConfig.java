@@ -47,6 +47,7 @@ public class SecurityConfig {
                             "/ws/**",
                             "/api/files/content",
                             "/api/media/content/**",
+                            "/api/media/saved/content/**",
                             "/api/klipy/**"
                     ).permitAll()
                     .anyRequest().authenticated()
