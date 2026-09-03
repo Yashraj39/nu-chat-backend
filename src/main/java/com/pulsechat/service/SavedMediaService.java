@@ -54,8 +54,6 @@ public class SavedMediaService {
                         .createdAt(Instant.now())
                         .build());
 
-        // Keep the first uploader as the original contributor, while the
-        // count and last-used timestamp are shared across the whole site.
         if (item.getSenderId() == null || item.getSenderId().isBlank()) {
             item.setSenderId(user.getId());
             item.setSenderName(user.getDisplayName());
@@ -74,15 +72,66 @@ public class SavedMediaService {
         repo.save(item);
     }
 
-    /** Returns the shared media library for all authenticated users. */
+    /**
+     * Returns the shared library. Legacy entries that still point at external
+     * hosts are imported into Cloudinary when possible. Unsupported/blocked
+     * entries are removed so they cannot keep appearing as broken GIFs.
+     */
     public List<SavedMedia> list() {
-        return repo.findAllByOrderBySentCountDescLastSentAtDesc();
+        backfillLegacyHistory();
+
+        List<SavedMedia> items = repo.findAllByOrderBySentCountDescLastSentAtDesc();
+        List<SavedMedia> valid = new ArrayList<>();
+
+        for (SavedMedia item : items) {
+            try {
+                if (!isCloudinaryUrl(item.getUrl())) {
+                    CloudinaryService.RemoteUploadResult remote = cloud.uploadRemoteUrl(item.getUrl());
+                    item.setUrl(remote.url());
+                    item.setPreviewUrl(remote.url());
+                    item.setPublicId(remote.publicId());
+                    item.setMimeType(remote.mimeType());
+                    if (remote.width() > 0) item.setWidth(remote.width());
+                    if (remote.height() > 0) item.setHeight(remote.height());
+                    repo.save(item);
+                }
+                valid.add(item);
+            } catch (Exception ignored) {
+                // Do not show media that the site cannot reliably host.
+                try {
+                    repo.deleteById(item.getId());
+                } catch (Exception ignoredDelete) {
+                }
+            }
+        }
+
+        valid.sort(Comparator
+                .comparingLong(SavedMedia::getSentCount).reversed()
+                .thenComparing(SavedMedia::getLastSentAt, Comparator.nullsLast(Comparator.reverseOrder())));
+        return valid;
     }
 
     /** Returns any shared library item; it is intentionally not user-owned. */
     public SavedMedia get(String id) {
-        return repo.findById(id)
+        SavedMedia item = repo.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Saved media not found."));
+
+        try {
+            if (!isCloudinaryUrl(item.getUrl())) {
+                CloudinaryService.RemoteUploadResult remote = cloud.uploadRemoteUrl(item.getUrl());
+                item.setUrl(remote.url());
+                item.setPreviewUrl(remote.url());
+                item.setPublicId(remote.publicId());
+                item.setMimeType(remote.mimeType());
+                if (remote.width() > 0) item.setWidth(remote.width());
+                if (remote.height() > 0) item.setHeight(remote.height());
+                repo.save(item);
+            }
+            return item;
+        } catch (Exception e) {
+            repo.deleteById(id);
+            throw new IllegalArgumentException("That media is no longer supported and was removed from the shared library.");
+        }
     }
 
     /**
@@ -112,7 +161,7 @@ public class SavedMediaService {
             int storedWidth = media.getWidth();
             int storedHeight = media.getHeight();
 
-            if ("KLIPY".equalsIgnoreCase(media.getProvider()) && !isCloudinaryUrl(url)) {
+            if (!isCloudinaryUrl(url)) {
                 try {
                     var remote = cloud.uploadRemoteUrl(url);
                     storedUrl = remote.url();
@@ -122,7 +171,7 @@ public class SavedMediaService {
                     if (storedWidth <= 0) storedWidth = remote.width();
                     if (storedHeight <= 0) storedHeight = remote.height();
                 } catch (Exception ignored) {
-                    // Keep the legacy URL as a fallback; one failed media must not break migration.
+                    // Leave it for list() to remove if it cannot be imported.
                 }
             }
 
