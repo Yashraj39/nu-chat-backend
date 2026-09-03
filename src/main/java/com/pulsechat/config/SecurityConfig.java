@@ -46,7 +46,8 @@ public class SecurityConfig {
                             "/actuator/health",
                             "/ws/**",
                             "/api/files/content",
-                            "/api/media/content/**"
+                            "/api/media/content/**",
+                            "/api/klipy/**"
                     ).permitAll()
                     .anyRequest().authenticated()
             )
