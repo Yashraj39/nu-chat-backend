@@ -29,13 +29,11 @@ public class CloudinaryDownloadService {
     }
 
     /**
-     * Generates a short-lived Cloudinary download URL.
-     *
-     * New PDFs/raw files are private. Older files have /upload/ in their
-     * stored URL, so their original delivery type is preserved. Cloudinary's
-     * signed private-download API keeps the API secret server-side.
+     * Creates a server-to-server Cloudinary delivery URL.
+     * The browser never receives this URL; ChatController fetches it from
+     * Render and streams the bytes to the client through /api/files/content.
      */
-    public String createDownloadUrl(Message.FileInfo file) throws Exception {
+    public String createDownloadUrl(Message.FileInfo file) {
         if (cloud == null) {
             throw new IllegalStateException("Cloudinary is not configured.");
         }
@@ -44,20 +42,18 @@ public class CloudinaryDownloadService {
         }
 
         String resourceType = resolveResourceType(file.getMimeType());
-        String format = resolveFormat(file.getOriginalName(), file.getPublicId());
         String deliveryType = resolveDeliveryType(file.getUrl());
-        long expiresAt = (System.currentTimeMillis() / 1000L) + 300L;
+        String format = resolveFormat(file.getOriginalName(), file.getPublicId());
 
-        return cloud.privateDownload(
-                file.getPublicId(),
-                format,
-                ObjectUtils.asMap(
-                        "resource_type", resourceType,
-                        "type", deliveryType,
-                        "attachment", true,
-                        "expires_at", expiresAt
-                )
-        );
+        // sign_url makes private/authenticated resources accessible to the
+        // backend without exposing Cloudinary credentials to the browser.
+        return cloud.url(file.getPublicId(), ObjectUtils.asMap(
+                "secure", true,
+                "resource_type", resourceType,
+                "type", deliveryType,
+                "sign_url", true,
+                "format", format
+        ));
     }
 
     private String resolveDeliveryType(String storedUrl) {
@@ -85,6 +81,6 @@ public class CloudinaryDownloadService {
                 return source.substring(dot + 1).toLowerCase(Locale.ROOT);
             }
         }
-        return "bin";
+        return null;
     }
 }
