@@ -8,7 +8,6 @@ import com.pulsechat.repo.MessageRepository;
 import com.pulsechat.repo.SavedMediaRepository;
 import org.springframework.stereotype.Service;
 
-import java.net.URI;
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -17,18 +16,16 @@ import java.util.stream.Collectors;
 public class SavedMediaService {
     private final SavedMediaRepository repo;
     private final MessageRepository messages;
-    private final CloudinaryService cloud;
 
-    public SavedMediaService(SavedMediaRepository repo, MessageRepository messages, CloudinaryService cloud) {
+    public SavedMediaService(SavedMediaRepository repo, MessageRepository messages) {
         this.repo = repo;
         this.messages = messages;
-        this.cloud = cloud;
     }
 
     /**
-     * Adds media to the shared site-wide library. The media is keyed by URL,
-     * so when another user sends the same GIF/link it increases the global
-     * usage count instead of creating a private copy.
+     * Adds media to the shared site-wide library.
+     * The original direct URL is retained; no proxy, download, or media host
+     * is introduced. The URL is the unique key for the shared item.
      */
     public void recordSent(User user, String kind, String provider, String providerId,
                            String title, String url, String previewUrl, String publicId,
@@ -72,72 +69,22 @@ public class SavedMediaService {
         repo.save(item);
     }
 
-    /**
-     * Returns the shared library. Legacy entries that still point at external
-     * hosts are imported into Cloudinary when possible. Unsupported/blocked
-     * entries are removed so they cannot keep appearing as broken GIFs.
-     */
+    /** Returns the shared media library for every authenticated user. */
     public List<SavedMedia> list() {
         backfillLegacyHistory();
-
-        List<SavedMedia> items = repo.findAllByOrderBySentCountDescLastSentAtDesc();
-        List<SavedMedia> valid = new ArrayList<>();
-
-        for (SavedMedia item : items) {
-            try {
-                if (!isCloudinaryUrl(item.getUrl())) {
-                    CloudinaryService.RemoteUploadResult remote = cloud.uploadRemoteUrl(item.getUrl());
-                    item.setUrl(remote.url());
-                    item.setPreviewUrl(remote.url());
-                    item.setPublicId(remote.publicId());
-                    item.setMimeType(remote.mimeType());
-                    if (remote.width() > 0) item.setWidth(remote.width());
-                    if (remote.height() > 0) item.setHeight(remote.height());
-                    repo.save(item);
-                }
-                valid.add(item);
-            } catch (Exception ignored) {
-                // Do not show media that the site cannot reliably host.
-                try {
-                    repo.deleteById(item.getId());
-                } catch (Exception ignoredDelete) {
-                }
-            }
-        }
-
-        valid.sort(Comparator
-                .comparingLong(SavedMedia::getSentCount).reversed()
-                .thenComparing(SavedMedia::getLastSentAt, Comparator.nullsLast(Comparator.reverseOrder())));
-        return valid;
+        return repo.findAllByOrderBySentCountDescLastSentAtDesc();
     }
 
-    /** Returns any shared library item; it is intentionally not user-owned. */
+    /** Returns a shared item without restricting it to its original sender. */
     public SavedMedia get(String id) {
-        SavedMedia item = repo.findById(id)
+        return repo.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Saved media not found."));
-
-        try {
-            if (!isCloudinaryUrl(item.getUrl())) {
-                CloudinaryService.RemoteUploadResult remote = cloud.uploadRemoteUrl(item.getUrl());
-                item.setUrl(remote.url());
-                item.setPreviewUrl(remote.url());
-                item.setPublicId(remote.publicId());
-                item.setMimeType(remote.mimeType());
-                if (remote.width() > 0) item.setWidth(remote.width());
-                if (remote.height() > 0) item.setHeight(remote.height());
-                repo.save(item);
-            }
-            return item;
-        } catch (Exception e) {
-            repo.deleteById(id);
-            throw new IllegalArgumentException("That media is no longer supported and was removed from the shared library.");
-        }
     }
 
     /**
-     * One-time compatibility migration for legacy per-user GIF history.
-     * It imports old message history into the new global library when the
-     * corresponding URL is not already present.
+     * Imports GIF/sticker messages created before the shared-media change.
+     * Existing direct URLs are kept exactly as they were; no network request
+     * is made by the server. The browser will validate usability locally.
      */
     public void backfillLegacyHistory() {
         List<Message> existing = messages.findByTypeIn(List.of(MessageType.GIF, MessageType.STICKER));
@@ -154,26 +101,6 @@ public class SavedMediaService {
                     .max(Comparator.comparing(Message::getCreatedAt))
                     .orElse(group.get(0));
             Message.MediaInfo media = latest.getMedia();
-            String storedUrl = url;
-            String storedPreview = media.getPreviewUrl();
-            String storedPublicId = null;
-            String storedMime = media.getMimeType();
-            int storedWidth = media.getWidth();
-            int storedHeight = media.getHeight();
-
-            if (!isCloudinaryUrl(url)) {
-                try {
-                    var remote = cloud.uploadRemoteUrl(url);
-                    storedUrl = remote.url();
-                    storedPreview = remote.url();
-                    storedPublicId = remote.publicId();
-                    if (storedMime == null || storedMime.isBlank()) storedMime = remote.mimeType();
-                    if (storedWidth <= 0) storedWidth = remote.width();
-                    if (storedHeight <= 0) storedHeight = remote.height();
-                } catch (Exception ignored) {
-                    // Leave it for list() to remove if it cannot be imported.
-                }
-            }
 
             repo.save(SavedMedia.builder()
                     .senderId(latest.getSenderId())
@@ -182,25 +109,16 @@ public class SavedMediaService {
                     .provider(media.getProvider())
                     .providerId(media.getProviderId())
                     .title(media.getTitle())
-                    .url(storedUrl)
-                    .previewUrl(storedPreview)
-                    .publicId(storedPublicId)
-                    .mimeType(storedMime)
-                    .width(storedWidth)
-                    .height(storedHeight)
+                    .url(url)
+                    .previewUrl(media.getPreviewUrl() == null || media.getPreviewUrl().isBlank() ? url : media.getPreviewUrl())
+                    .publicId(null)
+                    .mimeType(media.getMimeType())
+                    .width(media.getWidth())
+                    .height(media.getHeight())
                     .sentCount(group.size())
                     .createdAt(group.stream().map(Message::getCreatedAt).min(Instant::compareTo).orElse(Instant.now()))
                     .lastSentAt(latest.getCreatedAt())
                     .build());
         });
-    }
-
-    private boolean isCloudinaryUrl(String url) {
-        try {
-            String host = URI.create(url).getHost();
-            return host != null && host.toLowerCase(Locale.ROOT).endsWith("res.cloudinary.com");
-        } catch (Exception e) {
-            return false;
-        }
     }
 }
