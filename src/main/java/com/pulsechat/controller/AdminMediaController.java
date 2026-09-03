@@ -1,5 +1,6 @@
 package com.pulsechat.controller;
 
+import com.pulsechat.model.SavedMedia;
 import com.pulsechat.model.User;
 import com.pulsechat.repo.UserRepository;
 import com.pulsechat.service.SavedMediaService;
@@ -31,6 +32,11 @@ public class AdminMediaController {
 
         if (user.getRole() == null || !"ADMIN".equals(user.getRole().name())) {
             return ResponseEntity.status(403).body(Map.of("message", "Only admins can remove shared media."));
+        }
+
+        SavedMedia item = savedMedia.get(id);
+        if (!"LINK".equalsIgnoreCase(item.getProvider())) {
+            return ResponseEntity.status(403).body(Map.of("message", "Only direct-link media can be removed here."));
         }
 
         savedMedia.delete(id);
