@@ -97,8 +97,13 @@ public class MessageService {
  }
 
  private Message.FileInfo normalizeExternalFile(Message.FileInfo file) {
+   // Files coming from /api/files/upload already have a Cloudinary publicId.
+   // Their URL is deliberately rewritten to the backend proxy, so never try
+   // to import that proxy URL back into Cloudinary.
+   if(file.getPublicId() != null && !file.getPublicId().isBlank()) return file;
+
    String url = file.getUrl() == null ? "" : file.getUrl().trim();
-   if(url.isBlank() || isCloudinaryUrl(url)) return file;
+   if(url.isBlank()) return file;
 
    try {
      CloudinaryService.RemoteUploadResult remote = cloud.uploadRemoteUrl(url);
