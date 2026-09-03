@@ -4,11 +4,22 @@ import com.pulsechat.model.*;
 import com.pulsechat.repo.MessageRepository;
 import com.pulsechat.repo.UserRepository;
 import com.pulsechat.service.*;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.URI;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 @RestController
@@ -31,8 +42,6 @@ public class ChatController {
     private User user(String id) { return users.findById(id).orElseThrow(); }
 
     private void ensureGlobalMediaHistory() {
-        // Legacy GIF/sticker records used to be stored per user. Import them
-        // once into the shared library before the first global listing.
         savedMedia.backfillLegacyHistory();
     }
 
@@ -85,11 +94,6 @@ public class ChatController {
         ws.convertAndSend("/topic/chat",m); return m;
     }
 
-    /**
-     * Stores a direct external media URL exactly as supplied by the user.
-     * No proxy, download, Cloudinary import, or server-side media request is performed.
-     * The browser loads the URL directly when displaying the message.
-     */
     @PostMapping("/media/link")
     public Message linkMedia(@RequestBody Map<String,Object> body, org.springframework.security.core.Authentication a) {
         User u=user(a.getName());
@@ -176,7 +180,79 @@ public class ChatController {
     public Map<String,String> fileDownloadUrl(@PathVariable String messageId, org.springframework.security.core.Authentication a) throws Exception {
         Message message=messageRepo.findById(messageId).orElseThrow(()->new NoSuchElementException("Message not found."));
         if(message.isDeleted() || message.getFile()==null) throw new NoSuchElementException("File not found.");
-        return Map.of("url",downloads.createDownloadUrl(message.getFile()));
+        Message.FileInfo file=message.getFile();
+        if(file.getPublicId()==null || file.getPublicId().isBlank()) {
+            return Map.of("url",file.getUrl());
+        }
+        return Map.of("url",proxyUrl(file.getPublicId(), true));
+    }
+
+    /**
+     * Browser-facing Cloudinary proxy. The college computer only connects to
+     * this application's domain; Cloudinary is contacted server-side.
+     * This endpoint is intentionally public so native img/video/audio elements
+     * can load it without exposing a bearer token in a URL.
+     */
+    @GetMapping("/files/content")
+    public ResponseEntity<StreamingResponseBody> fileContent(
+            @RequestParam("publicId") String publicId,
+            @RequestParam(value="download", defaultValue="false") boolean download
+    ) throws Exception {
+        String cleanPublicId=publicId == null ? "" : publicId.trim();
+        if(cleanPublicId.isBlank() || cleanPublicId.length()>512 || cleanPublicId.contains("\\0")) {
+            throw new IllegalArgumentException("Invalid file identifier.");
+        }
+
+        Message message=messageRepo.findByFilePublicId(cleanPublicId)
+                .orElseThrow(()->new NoSuchElementException("File not found."));
+        if(message.isDeleted() || message.getFile()==null) {
+            throw new NoSuchElementException("File not found.");
+        }
+
+        Message.FileInfo file=message.getFile();
+        String cloudinaryUrl=downloads.createDownloadUrl(file);
+        URL remote=new URL(cloudinaryUrl);
+        HttpURLConnection connection=(HttpURLConnection)remote.openConnection();
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(15000);
+        connection.setReadTimeout(60000);
+        connection.setInstanceFollowRedirects(true);
+
+        int status=connection.getResponseCode();
+        if(status < 200 || status >= 300) {
+            connection.disconnect();
+            throw new IOException("Cloudinary returned HTTP " + status + ".");
+        }
+
+        String contentType=file.getMimeType();
+        if(contentType==null || contentType.isBlank()) contentType="application/octet-stream";
+        String filename=file.getOriginalName()==null || file.getOriginalName().isBlank() ? "download" : file.getOriginalName();
+        String disposition=(download ? "attachment" : "inline") + "; filename*=UTF-8''" +
+                URLEncoder.encode(filename, StandardCharsets.UTF_8).replace("+", "%20");
+        long length=connection.getContentLengthLong();
+
+        StreamingResponseBody stream=output -> {
+            try(InputStream input=connection.getInputStream()) {
+                byte[] buffer=new byte[16 * 1024];
+                int read;
+                while((read=input.read(buffer))!=-1) output.write(buffer,0,read);
+                output.flush();
+            } finally {
+                connection.disconnect();
+            }
+        };
+
+        ResponseEntity.BodyBuilder builder=ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(contentType))
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition)
+                .header(HttpHeaders.CACHE_CONTROL, "private, max-age=300");
+        if(length>=0) builder.contentLength(length);
+        return builder.body(stream);
+    }
+
+    private String proxyUrl(String publicId, boolean download) {
+        String encoded=URLEncoder.encode(publicId, StandardCharsets.UTF_8);
+        return "/api/files/content?publicId=" + encoded + (download ? "&download=true" : "");
     }
 
     @DeleteMapping("/messages/{id}")
