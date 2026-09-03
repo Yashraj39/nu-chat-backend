@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Optional;
 
 public interface SavedMediaRepository extends MongoRepository<SavedMedia, String> {
-    Optional<SavedMedia> findBySenderIdAndUrl(String senderId, String url);
-    List<SavedMedia> findBySenderIdOrderBySentCountDescLastSentAtDesc(String senderId);
-    long countBySenderId(String senderId);
+    Optional<SavedMedia> findByUrl(String url);
+    List<SavedMedia> findAllByOrderBySentCountDescLastSentAtDesc();
 }
