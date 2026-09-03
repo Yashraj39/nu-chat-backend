@@ -30,11 +30,9 @@ public class CloudinaryDownloadService {
     }
 
     /**
-     * Creates a URL that Render can use to fetch the stored Cloudinary asset.
-     * Private/authenticated assets use Cloudinary's signed private-download API;
-     * normal uploads use a signed delivery URL. The browser never receives
-     * either Cloudinary URL because ChatController streams the bytes through
-     * the application's /api/files/content endpoint.
+     * Creates a server-side Cloudinary URL for the proxy to fetch.
+     * Private assets use Cloudinary's private-download API. Public assets use
+     * a signed delivery URL. The browser only receives the application's proxy URL.
      */
     public String createDownloadUrl(Message.FileInfo file) throws Exception {
         if (cloud == null) throw new IllegalStateException("Cloudinary is not configured.");
@@ -43,7 +41,7 @@ public class CloudinaryDownloadService {
         }
 
         String resourceType = resolveResourceType(file.getMimeType());
-        String deliveryType = resolveDeliveryType(file.getUrl());
+        String deliveryType = resolveDeliveryType(file);
         String format = resolveFormat(file.getOriginalName(), file.getPublicId());
 
         if ("private".equals(deliveryType) || "authenticated".equals(deliveryType)) {
@@ -69,10 +67,19 @@ public class CloudinaryDownloadService {
         return url.generate(file.getPublicId());
     }
 
-    private String resolveDeliveryType(String storedUrl) {
+    private String resolveDeliveryType(Message.FileInfo file) {
+        String storedUrl = file.getUrl();
         if (storedUrl != null) {
             if (storedUrl.contains("/private/")) return "private";
             if (storedUrl.contains("/authenticated/")) return "authenticated";
+        }
+
+        // The upload service stores PDFs and arbitrary raw files as private.
+        // Their database URL may now be the backend proxy URL, so don't rely
+        // on the URL to determine the delivery type.
+        String mime = file.getMimeType() == null ? "" : file.getMimeType().toLowerCase(Locale.ROOT);
+        if ("application/pdf".equals(mime) || (!mime.startsWith("image/") && !mime.startsWith("video/") && !mime.startsWith("audio/"))) {
+            return "private";
         }
         return "upload";
     }
