@@ -30,14 +30,14 @@ public class CloudinaryDownloadService {
     }
 
     /**
-     * Creates a signed Cloudinary delivery URL on the backend.
-     * The browser should never receive this URL directly; ChatController
-     * fetches it from Render and streams the bytes through the backend proxy.
+     * Creates a URL that Render can use to fetch the stored Cloudinary asset.
+     * Private/authenticated assets use Cloudinary's signed private-download API;
+     * normal uploads use a signed delivery URL. The browser never receives
+     * either Cloudinary URL because ChatController streams the bytes through
+     * the application's /api/files/content endpoint.
      */
-    public String createDownloadUrl(Message.FileInfo file) {
-        if (cloud == null) {
-            throw new IllegalStateException("Cloudinary is not configured.");
-        }
+    public String createDownloadUrl(Message.FileInfo file) throws Exception {
+        if (cloud == null) throw new IllegalStateException("Cloudinary is not configured.");
         if (file == null || file.getPublicId() == null || file.getPublicId().isBlank()) {
             throw new IllegalArgumentException("File metadata is missing.");
         }
@@ -46,16 +46,26 @@ public class CloudinaryDownloadService {
         String deliveryType = resolveDeliveryType(file.getUrl());
         String format = resolveFormat(file.getOriginalName(), file.getPublicId());
 
+        if ("private".equals(deliveryType) || "authenticated".equals(deliveryType)) {
+            String downloadFormat = format == null || format.isBlank() ? "bin" : format;
+            return cloud.privateDownload(
+                    file.getPublicId(),
+                    downloadFormat,
+                    ObjectUtils.asMap(
+                            "resource_type", resourceType,
+                            "type", deliveryType,
+                            "attachment", false,
+                            "expires_at", (System.currentTimeMillis() / 1000L) + 3600L
+                    )
+            );
+        }
+
         Url url = cloud.url()
                 .secure(true)
                 .resourceType(resourceType)
-                .type(deliveryType)
+                .type("upload")
                 .signed(true);
-
-        if (format != null && !format.isBlank()) {
-            url.format(format);
-        }
-
+        if (format != null && !format.isBlank()) url.format(format);
         return url.generate(file.getPublicId());
     }
 
@@ -75,9 +85,7 @@ public class CloudinaryDownloadService {
     }
 
     private String resolveFormat(String originalName, String publicId) {
-        String source = originalName != null && originalName.contains(".")
-                ? originalName
-                : publicId;
+        String source = originalName != null && originalName.contains(".") ? originalName : publicId;
         if (source != null) {
             int dot = source.lastIndexOf('.');
             if (dot >= 0 && dot < source.length() - 1) {
