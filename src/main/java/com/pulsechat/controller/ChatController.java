@@ -4,6 +4,7 @@ import com.pulsechat.model.*;
 import com.pulsechat.repo.MessageRepository;
 import com.pulsechat.repo.UserRepository;
 import com.pulsechat.service.*;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -14,7 +15,6 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
@@ -46,7 +46,11 @@ public class ChatController {
     }
 
     @GetMapping("/messages")
-    public List<Message> latest(org.springframework.security.core.Authentication a) { return messages.latest(); }
+    public List<Message> latest(org.springframework.security.core.Authentication a, HttpServletRequest request) {
+        List<Message> result=messages.latest();
+        result.forEach(m -> exposeFileProxy(m, request));
+        return result;
+    }
 
     @PostMapping("/messages")
     public Message text(@RequestBody Map<String,String> body, org.springframework.security.core.Authentication a) {
@@ -55,13 +59,15 @@ public class ChatController {
     }
 
     @PostMapping("/files/upload")
-    public Map<String,Object> upload(@RequestParam("file") MultipartFile file, org.springframework.security.core.Authentication a) throws Exception {
+    public Map<String,Object> upload(@RequestParam("file") MultipartFile file, org.springframework.security.core.Authentication a,
+                                     HttpServletRequest request) throws Exception {
         var x=cloud.upload(file);
-        return Map.of("url",x.url(),"publicId",x.publicId(),"originalName",x.originalName(),"mimeType",x.mimeType(),"size",x.size());
+        return Map.of("url",proxyUrl(x.publicId(), false, request),"publicId",x.publicId(),"originalName",x.originalName(),"mimeType",x.mimeType(),"size",x.size());
     }
 
     @PostMapping("/messages/file")
-    public Message file(@RequestBody Map<String,Object> body, org.springframework.security.core.Authentication a) {
+    public Message file(@RequestBody Map<String,Object> body, org.springframework.security.core.Authentication a,
+                        HttpServletRequest request) {
         User u=user(a.getName());
         MessageType t;
         String requestedType=String.valueOf(body.getOrDefault("type",""));
@@ -89,6 +95,8 @@ public class ChatController {
         if(media!=null) {
             savedMedia.recordSent(u, t.name(), media.getProvider(), media.getProviderId(), media.getTitle(),
                     media.getUrl(), media.getPreviewUrl(), null, media.getMimeType(), media.getWidth(), media.getHeight());
+        } else {
+            exposeFileProxy(m, request);
         }
 
         ws.convertAndSend("/topic/chat",m); return m;
@@ -105,7 +113,6 @@ public class ChatController {
         String replyToMessageId=body.get("replyToMessageId") == null ? null : String.valueOf(body.get("replyToMessageId"));
 
         validateHttpUrl(sourceUrl);
-
         String lowerUrl=sourceUrl.toLowerCase(Locale.ROOT);
         String kind=requestedType;
         if(kind.isBlank()) {
@@ -149,7 +156,7 @@ public class ChatController {
 
     @PostMapping("/media/saved/{id}/send")
     public Message sendSaved(@PathVariable String id, @RequestBody(required=false) Map<String,Object> body,
-                             org.springframework.security.core.Authentication a) {
+                             org.springframework.security.core.Authentication a, HttpServletRequest request) {
         User u=user(a.getName());
         ensureGlobalMediaHistory();
         SavedMedia item=savedMedia.get(id);
@@ -168,6 +175,7 @@ public class ChatController {
                     .url(item.getUrl()).publicId(item.getPublicId()).originalName(item.getTitle() == null ? "linked-media" : item.getTitle())
                     .mimeType(item.getMimeType()).size(0L).build();
             message=messages.create(u, type, null, fi, replyToMessageId);
+            exposeFileProxy(message, request);
         }
 
         savedMedia.recordSent(u, item.getKind(), item.getProvider(), item.getProviderId(), item.getTitle(),
@@ -177,21 +185,19 @@ public class ChatController {
     }
 
     @GetMapping("/files/{messageId}/download-url")
-    public Map<String,String> fileDownloadUrl(@PathVariable String messageId, org.springframework.security.core.Authentication a) throws Exception {
+    public Map<String,String> fileDownloadUrl(@PathVariable String messageId, org.springframework.security.core.Authentication a,
+                                               HttpServletRequest request) throws Exception {
         Message message=messageRepo.findById(messageId).orElseThrow(()->new NoSuchElementException("Message not found."));
         if(message.isDeleted() || message.getFile()==null) throw new NoSuchElementException("File not found.");
         Message.FileInfo file=message.getFile();
-        if(file.getPublicId()==null || file.getPublicId().isBlank()) {
-            return Map.of("url",file.getUrl());
-        }
-        return Map.of("url",proxyUrl(file.getPublicId(), true));
+        if(file.getPublicId()==null || file.getPublicId().isBlank()) return Map.of("url",file.getUrl());
+        return Map.of("url",proxyUrl(file.getPublicId(), true, request));
     }
 
     /**
-     * Browser-facing Cloudinary proxy. The college computer only connects to
-     * this application's domain; Cloudinary is contacted server-side.
-     * This endpoint is intentionally public so native img/video/audio elements
-     * can load it without exposing a bearer token in a URL.
+     * Streams a Cloudinary file through this server. The browser never needs
+     * to contact res.cloudinary.com, which makes file sharing work on networks
+     * that block Cloudinary while keeping Cloudinary as the storage layer.
      */
     @GetMapping("/files/content")
     public ResponseEntity<StreamingResponseBody> fileContent(
@@ -199,15 +205,13 @@ public class ChatController {
             @RequestParam(value="download", defaultValue="false") boolean download
     ) throws Exception {
         String cleanPublicId=publicId == null ? "" : publicId.trim();
-        if(cleanPublicId.isBlank() || cleanPublicId.length()>512 || cleanPublicId.contains("\\0")) {
+        if(cleanPublicId.isBlank() || cleanPublicId.length()>512 || cleanPublicId.indexOf('\0')>=0) {
             throw new IllegalArgumentException("Invalid file identifier.");
         }
 
         Message message=messageRepo.findByFilePublicId(cleanPublicId)
                 .orElseThrow(()->new NoSuchElementException("File not found."));
-        if(message.isDeleted() || message.getFile()==null) {
-            throw new NoSuchElementException("File not found.");
-        }
+        if(message.isDeleted() || message.getFile()==null) throw new NoSuchElementException("File not found.");
 
         Message.FileInfo file=message.getFile();
         String cloudinaryUrl=downloads.createDownloadUrl(file);
@@ -250,9 +254,18 @@ public class ChatController {
         return builder.body(stream);
     }
 
-    private String proxyUrl(String publicId, boolean download) {
+    private void exposeFileProxy(Message message, HttpServletRequest request) {
+        if(message==null || message.getFile()==null) return;
+        String publicId=message.getFile().getPublicId();
+        if(publicId==null || publicId.isBlank()) return;
+        message.getFile().setUrl(proxyUrl(publicId, false, request));
+    }
+
+    private String proxyUrl(String publicId, boolean download, HttpServletRequest request) {
+        String base=request.getScheme()+"://"+request.getServerName();
+        if(request.getServerPort()!=80 && request.getServerPort()!=443) base += ":"+request.getServerPort();
         String encoded=URLEncoder.encode(publicId, StandardCharsets.UTF_8);
-        return "/api/files/content?publicId=" + encoded + (download ? "&download=true" : "");
+        return base+"/api/files/content?publicId="+encoded+(download ? "&download=true" : "");
     }
 
     @DeleteMapping("/messages/{id}")
@@ -265,12 +278,8 @@ public class ChatController {
         try {
             URI uri=URI.create(sourceUrl);
             String scheme=uri.getScheme();
-            if(!("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) || uri.getHost()==null || uri.getHost().isBlank()) {
-                throw new IllegalArgumentException();
-            }
-        } catch(Exception e) {
-            throw new IllegalArgumentException("Only valid HTTP/HTTPS media URLs are supported.");
-        }
+            if(!("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) || uri.getHost()==null || uri.getHost().isBlank()) throw new IllegalArgumentException();
+        } catch(Exception e) { throw new IllegalArgumentException("Only valid HTTP/HTTPS media URLs are supported."); }
     }
 
     private boolean looksLikeGif(String url) { return extension(url).equals("gif"); }
