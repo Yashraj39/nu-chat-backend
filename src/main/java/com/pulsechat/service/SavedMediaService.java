@@ -25,13 +25,18 @@ public class SavedMediaService {
         this.cloud = cloud;
     }
 
+    /**
+     * Adds media to the shared site-wide library. The media is keyed by URL,
+     * so when another user sends the same GIF/link it increases the global
+     * usage count instead of creating a private copy.
+     */
     public void recordSent(User user, String kind, String provider, String providerId,
                            String title, String url, String previewUrl, String publicId,
                            String mimeType, int width, int height) {
         if (user == null || url == null || url.isBlank()) return;
 
         String normalizedUrl = url.trim();
-        SavedMedia item = repo.findBySenderIdAndUrl(user.getId(), normalizedUrl)
+        SavedMedia item = repo.findByUrl(normalizedUrl)
                 .orElseGet(() -> SavedMedia.builder()
                         .senderId(user.getId())
                         .senderName(user.getDisplayName())
@@ -49,50 +54,57 @@ public class SavedMediaService {
                         .createdAt(Instant.now())
                         .build());
 
-        item.setSenderName(user.getDisplayName());
-        item.setKind(kind);
-        item.setProvider(provider);
-        item.setProviderId(providerId);
-        item.setTitle(title);
+        // Keep the first uploader as the original contributor, while the
+        // count and last-used timestamp are shared across the whole site.
+        if (item.getSenderId() == null || item.getSenderId().isBlank()) {
+            item.setSenderId(user.getId());
+            item.setSenderName(user.getDisplayName());
+        }
+        if (item.getKind() == null || item.getKind().isBlank()) item.setKind(kind);
+        if (item.getProvider() == null || item.getProvider().isBlank()) item.setProvider(provider);
+        if (item.getProviderId() == null || item.getProviderId().isBlank()) item.setProviderId(providerId);
+        if (item.getTitle() == null || item.getTitle().isBlank()) item.setTitle(title);
         item.setPreviewUrl(previewUrl == null || previewUrl.isBlank() ? normalizedUrl : previewUrl);
-        item.setPublicId(publicId == null || publicId.isBlank() ? item.getPublicId() : publicId);
-        item.setMimeType(mimeType);
-        item.setWidth(width);
-        item.setHeight(height);
+        if (publicId != null && !publicId.isBlank()) item.setPublicId(publicId);
+        if (mimeType != null && !mimeType.isBlank()) item.setMimeType(mimeType);
+        if (width > 0) item.setWidth(width);
+        if (height > 0) item.setHeight(height);
         item.setSentCount(item.getSentCount() + 1);
         item.setLastSentAt(Instant.now());
         repo.save(item);
     }
 
-    public List<SavedMedia> list(User user) {
-        backfillExistingGifHistory(user);
-        return repo.findBySenderIdOrderBySentCountDescLastSentAtDesc(user.getId());
+    /** Returns the shared media library for all authenticated users. */
+    public List<SavedMedia> list() {
+        return repo.findAllByOrderBySentCountDescLastSentAtDesc();
     }
 
-    public SavedMedia getForUser(User user, String id) {
+    /** Returns any shared library item; it is intentionally not user-owned. */
+    public SavedMedia get(String id) {
         return repo.findById(id)
-                .filter(x -> user.getId().equals(x.getSenderId()))
                 .orElseThrow(() -> new IllegalArgumentException("Saved media not found."));
     }
 
-    private void backfillExistingGifHistory(User user) {
-        if (repo.countBySenderId(user.getId()) > 0) return;
-
-        List<Message> existing = messages.findBySenderIdAndTypeIn(
-                user.getId(), List.of(MessageType.GIF, MessageType.STICKER));
-
+    /**
+     * One-time compatibility migration for legacy per-user GIF history.
+     * It imports old message history into the new global library when the
+     * corresponding URL is not already present.
+     */
+    public void backfillLegacyHistory() {
+        List<Message> existing = messages.findByTypeIn(List.of(MessageType.GIF, MessageType.STICKER));
         if (existing.isEmpty()) return;
 
         Map<String, List<Message>> grouped = existing.stream()
                 .filter(m -> m.getMedia() != null && m.getMedia().getUrl() != null && !m.getMedia().getUrl().isBlank())
-                .collect(Collectors.groupingBy(m -> m.getMedia().getUrl()));
+                .collect(Collectors.groupingBy(m -> m.getMedia().getUrl().trim()));
 
         grouped.forEach((url, group) -> {
+            if (repo.findByUrl(url).isPresent()) return;
+
             Message latest = group.stream()
                     .max(Comparator.comparing(Message::getCreatedAt))
                     .orElse(group.get(0));
             Message.MediaInfo media = latest.getMedia();
-
             String storedUrl = url;
             String storedPreview = media.getPreviewUrl();
             String storedPublicId = null;
@@ -110,13 +122,13 @@ public class SavedMediaService {
                     if (storedWidth <= 0) storedWidth = remote.width();
                     if (storedHeight <= 0) storedHeight = remote.height();
                 } catch (Exception ignored) {
-                    // Keep the legacy URL as a fallback; one failed media must not break the library.
+                    // Keep the legacy URL as a fallback; one failed media must not break migration.
                 }
             }
 
-            SavedMedia item = SavedMedia.builder()
-                    .senderId(user.getId())
-                    .senderName(user.getDisplayName())
+            repo.save(SavedMedia.builder()
+                    .senderId(latest.getSenderId())
+                    .senderName(latest.getSenderName())
                     .kind(latest.getType().name())
                     .provider(media.getProvider())
                     .providerId(media.getProviderId())
@@ -130,8 +142,7 @@ public class SavedMediaService {
                     .sentCount(group.size())
                     .createdAt(group.stream().map(Message::getCreatedAt).min(Instant::compareTo).orElse(Instant.now()))
                     .lastSentAt(latest.getCreatedAt())
-                    .build();
-            repo.save(item);
+                    .build());
         });
     }
 
