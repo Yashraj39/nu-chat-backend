@@ -34,6 +34,9 @@ public class GoogleDriveController {
     @GetMapping("/client-token")
     public ResponseEntity<Map<String, Object>> clientToken(Authentication authentication) throws Exception {
         if (authentication == null) throw new IllegalStateException("Authentication is required.");
+        if (!limiter.allow("drive-token:" + authentication.getName(), uploadRateLimit)) {
+            throw new IllegalStateException("Too many upload attempts. Please slow down.");
+        }
         String token = drive.clientAccessToken();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("accessToken", token);
