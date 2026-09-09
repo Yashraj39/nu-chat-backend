@@ -13,9 +13,13 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.Arrays;
+import java.util.stream.Stream;
 
 @Configuration
 public class SecurityConfig {
+
+  private static final String PRODUCTION_FRONTEND_ORIGIN =
+          "https://chitchatroom.vercel.app";
 
   @Value("${app.cors-origins}")
   private String origins;
@@ -66,10 +70,19 @@ public class SecurityConfig {
 
     CorsConfiguration configuration = new CorsConfiguration();
 
+    // Keep Render/environment configuration, but always allow the current
+    // production frontend so a stale CORS_ALLOWED_ORIGINS value cannot break
+    // the deployed login preflight.
+    var configuredOrigins = Arrays.stream(origins.split(","))
+            .map(String::trim)
+            .filter(s -> !s.isBlank());
+
     configuration.setAllowedOrigins(
-            Arrays.stream(origins.split(","))
-                    .map(String::trim)
-                    .filter(s -> !s.isBlank())
+            Stream.concat(
+                    configuredOrigins,
+                    Stream.of(PRODUCTION_FRONTEND_ORIGIN)
+            )
+                    .distinct()
                     .toList()
     );
 
