@@ -79,11 +79,18 @@
       <scope>runtime</scope>
     </dependency>
 
-    <!-- Cloudinary -->
+    <!-- Cloudinary (kept temporarily as fallback during Drive migration) -->
     <dependency>
       <groupId>com.cloudinary</groupId>
       <artifactId>cloudinary-http44</artifactId>
       <version>1.39.0</version>
+    </dependency>
+
+    <!-- Google Drive authentication -->
+    <dependency>
+      <groupId>com.google.auth</groupId>
+      <artifactId>google-auth-library-oauth2-http</artifactId>
+      <version>1.43.0</version>
     </dependency>
 
     <!-- Lombok -->
