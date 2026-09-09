@@ -5,6 +5,7 @@ import com.pulsechat.repo.MessageRepository;
 import com.pulsechat.repo.UserRepository;
 import com.pulsechat.service.*;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -32,11 +33,15 @@ public class ChatController {
     private final MessageRepository messageRepo;
     private final UserRepository users;
     private final SimpMessagingTemplate ws;
+    private final RateLimiter limiter;
+    private final int uploadRateLimit;
 
     public ChatController(MessageService m, CloudinaryService c, CloudinaryDownloadService d,
                           SavedMediaService sm, MessageRepository messageRepo, UserRepository u,
-                          SimpMessagingTemplate w) {
+                          SimpMessagingTemplate w, RateLimiter limiter,
+                          @Value("${app.upload-rate-limit:10}") int uploadRateLimit) {
         messages=m; cloud=c; downloads=d; savedMedia=sm; this.messageRepo=messageRepo; users=u; ws=w;
+        this.limiter=limiter; this.uploadRateLimit=Math.max(1,uploadRateLimit);
     }
 
     private User user(String id) { return users.findById(id).orElseThrow(); }
@@ -61,6 +66,9 @@ public class ChatController {
     @PostMapping("/files/upload")
     public Map<String,Object> upload(@RequestParam("file") MultipartFile file, org.springframework.security.core.Authentication a,
                                      HttpServletRequest request) throws Exception {
+        if(!limiter.allow("upload:"+a.getName(),uploadRateLimit)) {
+            throw new IllegalStateException("Too many uploads. Please slow down.");
+        }
         var x=cloud.upload(file);
         return Map.of("url",proxyUrl(x.publicId(), false, request),"publicId",x.publicId(),"originalName",x.originalName(),"mimeType",x.mimeType(),"size",x.size());
     }
@@ -142,10 +150,7 @@ public class ChatController {
         return message;
     }
 
-    /**
-     * Streams an imported GIF/sticker through Render so the browser can work
-     * even when direct Cloudinary access is blocked on the lab network.
-     */
+    /** Streams stored media through Render so the lab can access Cloudinary-backed assets. */
     @GetMapping("/media/content/{messageId}")
     public ResponseEntity<StreamingResponseBody> mediaContent(@PathVariable String messageId) throws Exception {
         Message message=messageRepo.findById(messageId).orElseThrow(()->new NoSuchElementException("Media not found."));
@@ -205,10 +210,7 @@ public class ChatController {
         return Map.of("url",proxyUrl(file.getPublicId(), true, request));
     }
 
-    /**
-     * Streams a Cloudinary file through this server. The browser never needs
-     * to contact res.cloudinary.com, which keeps file sharing working on the lab network.
-     */
+    /** Streams a Cloudinary file through Render; browser never needs direct Cloudinary access. */
     @GetMapping("/files/content")
     public ResponseEntity<StreamingResponseBody> fileContent(
             @RequestParam("publicId") String publicId,
