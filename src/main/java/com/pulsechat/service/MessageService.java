@@ -79,6 +79,12 @@ public class MessageService {
 
  private Message.MediaInfo normalizeExternalMedia(Message.MediaInfo media) {
    String url = media.getUrl().trim();
+
+   // Klipy media should stay at Klipy. Importing every GIF/sticker into
+   // Cloudinary makes Render fetch/proxy unnecessary data and increases
+   // bandwidth. The frontend already has direct Klipy preview URLs.
+   if("KLIPY".equalsIgnoreCase(media.getProvider())) return media;
+
    if(isCloudinaryUrl(url)) return media;
 
    try {
