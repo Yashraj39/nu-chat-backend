@@ -1,6 +1,7 @@
 package com.pulsechat.service;
 
 import com.cloudinary.Cloudinary;
+import com.cloudinary.Transformation;
 import com.cloudinary.Url;
 import com.cloudinary.utils.ObjectUtils;
 import com.pulsechat.model.Message;
@@ -58,11 +59,42 @@ public class CloudinaryDownloadService {
             );
         }
 
-        Url url = cloud.url()
+        return cloud.url()
                 .secure(true)
                 .resourceType(resourceType)
                 .type("upload")
-                .signed(true);
+                .signed(true)
+                .format(format == null || format.isBlank() ? null : format)
+                .generate(file.getPublicId());
+    }
+
+    /**
+     * Creates a small, efficient image delivery URL for chat previews.
+     * The original Cloudinary asset remains untouched and full downloads still
+     * use createDownloadUrl().
+     */
+    public String createImagePreviewUrl(Message.FileInfo file) throws Exception {
+        if (cloud == null) throw new IllegalStateException("Cloudinary is not configured.");
+        if (file == null || file.getPublicId() == null || file.getPublicId().isBlank()) {
+            throw new IllegalArgumentException("File metadata is missing.");
+        }
+
+        String mime = file.getMimeType() == null ? "" : file.getMimeType().toLowerCase(Locale.ROOT);
+        if (!mime.startsWith("image/") || "image/svg+xml".equals(mime)) {
+            return createDownloadUrl(file);
+        }
+
+        String format = resolveFormat(file.getOriginalName(), file.getPublicId());
+        Url url = cloud.url()
+                .secure(true)
+                .resourceType("image")
+                .type("upload")
+                .signed(true)
+                .transformation(new Transformation()
+                        .width(1200)
+                        .crop("limit")
+                        .quality("auto")
+                        .fetchFormat("auto"));
         if (format != null && !format.isBlank()) url.format(format);
         return url.generate(file.getPublicId());
     }
@@ -74,9 +106,6 @@ public class CloudinaryDownloadService {
             if (storedUrl.contains("/authenticated/")) return "authenticated";
         }
 
-        // The upload service stores PDFs and arbitrary raw files as private.
-        // Their database URL may now be the backend proxy URL, so don't rely
-        // on the URL to determine the delivery type.
         String mime = file.getMimeType() == null ? "" : file.getMimeType().toLowerCase(Locale.ROOT);
         if ("application/pdf".equals(mime) || (!mime.startsWith("image/") && !mime.startsWith("video/") && !mime.startsWith("audio/"))) {
             return "private";
