@@ -8,7 +8,7 @@ spring:
   servlet:
     multipart:
       max-file-size: ${MAX_FILE_SIZE_BYTES:26214400}
-      max-request-size: ${MAX_FILE_SIZE_BYTES:26214400}
+      max-request-size: ${MAX_REQUEST_SIZE_BYTES:26214400}
 management:
   endpoints:
     web:
@@ -25,6 +25,12 @@ app:
   chat-rate-limit: ${CHAT_RATE_LIMIT_PER_MINUTE:30}
   upload-rate-limit: ${UPLOAD_RATE_LIMIT_PER_MINUTE:10}
   admin-invite-code: ${ADMIN_INVITE_CODE:}
+google-drive:
+  client-id: ${GOOGLE_DRIVE_CLIENT_ID:}
+  client-secret: ${GOOGLE_DRIVE_CLIENT_SECRET:}
+  refresh-token: ${GOOGLE_DRIVE_REFRESH_TOKEN:}
+  folder-id: ${GOOGLE_DRIVE_FOLDER_ID:}
+  public-files: ${GOOGLE_DRIVE_PUBLIC_FILES:true}
 cloudinary:
   cloud-name: ${CLOUDINARY_CLOUD_NAME:}
   api-key: ${CLOUDINARY_API_KEY:}
