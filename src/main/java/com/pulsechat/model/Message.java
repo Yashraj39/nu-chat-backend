@@ -25,6 +25,7 @@ public class Message {
     public static class FileInfo {
         private String url;
         private String publicId;
+        private String driveFileId;
         private String originalName;
         private String mimeType;
         private long size;
