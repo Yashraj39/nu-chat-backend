@@ -27,6 +27,21 @@ public class GoogleDriveController {
         this.uploadRateLimit = Math.max(1, uploadRateLimit);
     }
 
+    /**
+     * Returns only a short-lived access token. The long-lived refresh token and
+     * OAuth client secret remain exclusively on the backend.
+     */
+    @GetMapping("/client-token")
+    public ResponseEntity<Map<String, Object>> clientToken(Authentication authentication) throws Exception {
+        if (authentication == null) throw new IllegalStateException("Authentication is required.");
+        String token = drive.clientAccessToken();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("accessToken", token);
+        result.put("folderId", drive.folderId());
+        return ResponseEntity.ok(result);
+    }
+
+    /** Legacy server-created session endpoint retained for compatibility/fallback. */
     @PostMapping("/prepare")
     public ResponseEntity<Map<String, Object>> prepare(
             @RequestBody PrepareRequest body,
