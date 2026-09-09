@@ -19,10 +19,10 @@ import java.util.*;
 /**
  * Google Drive storage adapter.
  *
- * The backend authenticates as the configured Google Drive owner, creates a
- * resumable upload session, and returns that session URL to the browser. The
- * browser then uploads the actual bytes directly to Google, so Render does
- * not carry the large file payload.
+ * The backend authenticates as the configured Google Drive owner. The browser
+ * receives only a short-lived access token and creates the resumable upload
+ * session from the frontend origin. The actual file bytes then go directly
+ * from the browser to Google Drive, so Render does not carry the file payload.
  */
 @Service
 public class GoogleDriveService {
@@ -64,6 +64,16 @@ public class GoogleDriveService {
 
     public boolean isConfigured() {
         return credentials != null && !folderId.isBlank();
+    }
+
+    /** Returns the short-lived access token. The refresh token never leaves the backend. */
+    public synchronized String clientAccessToken() throws IOException {
+        requireConfigured();
+        return accessToken();
+    }
+
+    public String folderId() {
+        return folderId;
     }
 
     /** Creates a Google Drive resumable upload session without receiving file bytes. */
