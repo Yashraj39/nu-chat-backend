@@ -239,7 +239,19 @@ public class GoogleDriveService {
     }
 
     private String stringValue(Object value) { return value == null ? "" : String.valueOf(value); }
-    private long longValue(Object value) { return value instanceof Number n ? n.longValue() : 0L; }
+
+    private long longValue(Object value) {
+        if (value instanceof Number n) return n.longValue();
+        if (value instanceof String s) {
+            try {
+                return Long.parseLong(s.trim());
+            } catch (NumberFormatException ignored) {
+                return 0L;
+            }
+        }
+        return 0L;
+    }
+
     private boolean isBlank(String value) { return value == null || value.isBlank(); }
 
     public record PreparedUpload(String uploadUrl, String originalName, String mimeType, long size) {}
