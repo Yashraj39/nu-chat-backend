@@ -14,6 +14,8 @@ import java.util.stream.Collectors;
 
 @Service
 public class SavedMediaService {
+    private static final int MAX_SHARED_MEDIA = 60;
+
     private final SavedMediaRepository repo;
     private final MessageRepository messages;
 
@@ -55,7 +57,10 @@ public class SavedMediaService {
 
     public List<SavedMedia> list() {
         backfillLegacyHistory();
-        return repo.findAllByOrderBySentCountDescLastSentAtDesc();
+        return repo.findAllByOrderBySentCountDescLastSentAtDesc().stream()
+                .filter(x -> !"LINK".equalsIgnoreCase(x.getProvider()))
+                .limit(MAX_SHARED_MEDIA)
+                .toList();
     }
 
     public SavedMedia get(String id) {
@@ -73,6 +78,7 @@ public class SavedMediaService {
         if (existing.isEmpty()) return;
         Map<String, List<Message>> grouped = existing.stream()
                 .filter(m -> m.getMedia() != null && m.getMedia().getUrl() != null && !m.getMedia().getUrl().isBlank())
+                .filter(m -> !"LINK".equalsIgnoreCase(m.getMedia().getProvider()))
                 .collect(Collectors.groupingBy(m -> m.getMedia().getUrl().trim()));
 
         grouped.forEach((url, group) -> {
