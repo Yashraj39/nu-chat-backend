@@ -95,6 +95,7 @@ public class ChatController {
                     .height(body.get("height") instanceof Number ? ((Number)body.get("height")).intValue() : 0).build();
         } else {
             fi=Message.FileInfo.builder().url((String)body.get("url")).publicId((String)body.get("publicId"))
+                    .driveFileId((String)body.get("driveFileId"))
                     .originalName((String)body.get("originalName")).mimeType((String)body.get("mimeType"))
                     .size(body.get("size") instanceof Number ? ((Number)body.get("size")).longValue() : 0L).build();
         }
@@ -284,6 +285,8 @@ public class ChatController {
 
     private void exposeFileProxy(Message message, HttpServletRequest request) {
         if(message==null || message.getFile()==null) return;
+        // Drive-backed files already have a browser-direct URL. Only legacy Cloudinary files are proxied.
+        if(message.getFile().getDriveFileId()!=null && !message.getFile().getDriveFileId().isBlank()) return;
         String publicId=message.getFile().getPublicId();
         if(publicId==null || publicId.isBlank()) return;
         message.getFile().setUrl(proxyUrl(publicId, false, request));
