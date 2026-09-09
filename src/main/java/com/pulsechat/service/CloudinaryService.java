@@ -13,6 +13,8 @@ import java.util.Map;
 
 @Service
 public class CloudinaryService {
+    private static final long MAX_UPLOAD_BYTES = 25L * 1024L * 1024L;
+
     private final Cloudinary cloud;
     private final long max;
 
@@ -20,9 +22,9 @@ public class CloudinaryService {
             @Value("${cloudinary.cloud-name}") String n,
             @Value("${cloudinary.api-key}") String k,
             @Value("${cloudinary.api-secret}") String s,
-            @Value("${app.max-file-size}") long max
+            @Value("${app.max-file-size:26214400}") long configuredMax
     ) {
-        this.max = max;
+        this.max = Math.min(Math.max(configuredMax, 1L), MAX_UPLOAD_BYTES);
         if (n.isBlank() || k.isBlank() || s.isBlank()) {
             cloud = null;
         } else {
@@ -44,7 +46,7 @@ public class CloudinaryService {
         String name = sanitizeFilename(f.getOriginalFilename());
         String mime = normalizeMime(f.getContentType());
         String resourceType = resolveResourceType(name, mime);
-        boolean restricted = "image".equals(resourceType) && isPdf(name, mime) || "raw".equals(resourceType);
+        boolean restricted = ("image".equals(resourceType) && isPdf(name, mime)) || "raw".equals(resourceType);
 
         Map<String, Object> options = new java.util.HashMap<>();
         options.put("resource_type", resourceType);
