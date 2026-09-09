@@ -59,19 +59,18 @@ public class CloudinaryDownloadService {
             );
         }
 
-        return cloud.url()
+        Url url = cloud.url()
                 .secure(true)
                 .resourceType(resourceType)
                 .type("upload")
-                .signed(true)
-                .format(format == null || format.isBlank() ? null : format)
-                .generate(file.getPublicId());
+                .signed(true);
+        if (format != null && !format.isBlank()) url.format(format);
+        return url.generate(file.getPublicId());
     }
 
     /**
-     * Creates a small, efficient image delivery URL for chat previews.
-     * The original Cloudinary asset remains untouched and full downloads still
-     * use createDownloadUrl().
+     * Creates an optimized image delivery URL for chat previews. The original
+     * asset remains untouched, while Cloudinary generates a smaller response.
      */
     public String createImagePreviewUrl(Message.FileInfo file) throws Exception {
         if (cloud == null) throw new IllegalStateException("Cloudinary is not configured.");
@@ -84,7 +83,6 @@ public class CloudinaryDownloadService {
             return createDownloadUrl(file);
         }
 
-        String format = resolveFormat(file.getOriginalName(), file.getPublicId());
         Url url = cloud.url()
                 .secure(true)
                 .resourceType("image")
@@ -95,7 +93,6 @@ public class CloudinaryDownloadService {
                         .crop("limit")
                         .quality("auto")
                         .fetchFormat("auto"));
-        if (format != null && !format.isBlank()) url.format(format);
         return url.generate(file.getPublicId());
     }
 
