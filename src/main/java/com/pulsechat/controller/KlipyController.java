@@ -1,31 +1,27 @@
 package com.pulsechat.controller;
 
-import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
-import java.net.URI;
 import java.net.URLEncoder;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 @RestController
 @RequestMapping("/api/klipy")
 public class KlipyController {
     private static final String KLIPY_API = "https://api.klipy.com";
+    private static final int MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024;
 
     @GetMapping(value = "/featured", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<byte[]> featured(
@@ -47,56 +43,6 @@ public class KlipyController {
             @RequestParam(required = false) String searchfilter
     ) throws IOException {
         return proxyApi("/v2/search", key, limit, contentfilter, media_filter, q, searchfilter);
-    }
-
-    @GetMapping("/content")
-    public ResponseEntity<StreamingResponseBody> content(@RequestParam String url) throws IOException {
-        URI uri;
-        try {
-            uri = URI.create(url.trim());
-        } catch (Exception e) {
-            throw new IllegalArgumentException("Invalid media URL.");
-        }
-
-        String scheme = uri.getScheme();
-        String host = uri.getHost();
-        if (!("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) || !isAllowedMediaHost(host)) {
-            throw new IllegalArgumentException("Only Klipy media URLs are supported.");
-        }
-
-        HttpURLConnection connection = (HttpURLConnection) uri.toURL().openConnection();
-        connection.setRequestMethod("GET");
-        connection.setConnectTimeout(15000);
-        connection.setReadTimeout(60000);
-        connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty("User-Agent", "PulseChat-Klipy-Proxy/1.0");
-
-        int status = connection.getResponseCode();
-        if (status < 200 || status >= 300) {
-            connection.disconnect();
-            throw new IOException("Klipy media returned HTTP " + status + ".");
-        }
-
-        String contentType = connection.getContentType();
-        if (contentType == null || contentType.isBlank()) contentType = "application/octet-stream";
-        long length = connection.getContentLengthLong();
-
-        StreamingResponseBody stream = output -> {
-            try (InputStream input = connection.getInputStream()) {
-                byte[] buffer = new byte[16 * 1024];
-                int read;
-                while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
-                output.flush();
-            } finally {
-                connection.disconnect();
-            }
-        };
-
-        ResponseEntity.BodyBuilder builder = ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType(contentType))
-                .header(HttpHeaders.CACHE_CONTROL, "public, max-age=300");
-        if (length >= 0) builder.contentLength(length);
-        return builder.body(stream);
     }
 
     private ResponseEntity<byte[]> proxyApi(
@@ -131,8 +77,7 @@ public class KlipyController {
         InputStream source = status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream();
         byte[] body;
         try (InputStream input = source) {
-            if (input == null) body = new byte[0];
-            else body = readAtMost(input, 2 * 1024 * 1024);
+            body = input == null ? new byte[0] : readAtMost(input, MAX_API_RESPONSE_BYTES);
         } finally {
             connection.disconnect();
         }
@@ -145,7 +90,7 @@ public class KlipyController {
 
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_JSON)
-                .cacheControl(org.springframework.http.CacheControl.noCache())
+                .cacheControl(org.springframework.http.CacheControl.maxAge(java.time.Duration.ofMinutes(5)).cachePublic())
                 .body(body);
     }
 
@@ -166,12 +111,5 @@ public class KlipyController {
             out.write(buffer, 0, read);
         }
         return out.toByteArray();
-    }
-
-    private static boolean isAllowedMediaHost(String host) {
-        if (host == null || host.isBlank()) return false;
-        String h = host.toLowerCase(Locale.ROOT);
-        return h.equals("klipy.com") || h.endsWith(".klipy.com")
-                || h.equals("klipycdn.com") || h.endsWith(".klipycdn.com");
     }
 }
