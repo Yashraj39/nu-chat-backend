@@ -150,7 +150,6 @@ public class ChatController {
         return message;
     }
 
-    /** Streams stored media through Render so the lab can access Cloudinary-backed assets. */
     @GetMapping("/media/content/{messageId}")
     public ResponseEntity<StreamingResponseBody> mediaContent(@PathVariable String messageId) throws Exception {
         Message message=messageRepo.findById(messageId).orElseThrow(()->new NoSuchElementException("Media not found."));
@@ -214,7 +213,8 @@ public class ChatController {
     @GetMapping("/files/content")
     public ResponseEntity<StreamingResponseBody> fileContent(
             @RequestParam("publicId") String publicId,
-            @RequestParam(value="download", defaultValue="false") boolean download
+            @RequestParam(value="download", defaultValue="false") boolean download,
+            HttpServletRequest request
     ) throws Exception {
         String cleanPublicId=publicId == null ? "" : publicId.trim();
         if(cleanPublicId.isBlank() || cleanPublicId.length()>512 || cleanPublicId.indexOf('\0')>=0) {
@@ -229,16 +229,26 @@ public class ChatController {
         String cloudinaryUrl=(!download && file.getMimeType()!=null && file.getMimeType().toLowerCase(Locale.ROOT).startsWith("image/") && !"image/svg+xml".equalsIgnoreCase(file.getMimeType()))
                 ? downloads.createImagePreviewUrl(file)
                 : downloads.createDownloadUrl(file);
-        URL remote=new URL(cloudinaryUrl);
-        HttpURLConnection connection=(HttpURLConnection)remote.openConnection();
+        HttpURLConnection connection=(HttpURLConnection)new URL(cloudinaryUrl).openConnection();
         connection.setRequestMethod("GET");
         connection.setConnectTimeout(15000);
         connection.setReadTimeout(60000);
         connection.setInstanceFollowRedirects(true);
 
+        String range=request.getHeader(HttpHeaders.RANGE);
+        if(range!=null && !range.isBlank()) connection.setRequestProperty(HttpHeaders.RANGE,range);
+        String ifRange=request.getHeader(HttpHeaders.IF_RANGE);
+        if(ifRange!=null && !ifRange.isBlank()) connection.setRequestProperty(HttpHeaders.IF_RANGE,ifRange);
+
         int status=connection.getResponseCode();
-        if(status < 200 || status >= 300) {
+        if(status != HttpURLConnection.HTTP_OK && status != HttpURLConnection.HTTP_PARTIAL) {
+            String contentRange=connection.getHeaderField(HttpHeaders.CONTENT_RANGE);
             connection.disconnect();
+            if(status==416) {
+                ResponseEntity.BodyBuilder error=ResponseEntity.status(416).header(HttpHeaders.CACHE_CONTROL,"private, max-age=60");
+                if(contentRange!=null) error.header(HttpHeaders.CONTENT_RANGE,contentRange);
+                return error.build();
+            }
             throw new IOException("Cloudinary returned HTTP " + status + ".");
         }
 
@@ -249,6 +259,7 @@ public class ChatController {
         String disposition=(download ? "attachment" : "inline") + "; filename*=UTF-8''" +
                 URLEncoder.encode(filename, StandardCharsets.UTF_8).replace("+", "%20");
         long length=connection.getContentLengthLong();
+        String contentRange=connection.getHeaderField(HttpHeaders.CONTENT_RANGE);
 
         StreamingResponseBody stream=output -> {
             try(InputStream input=connection.getInputStream()) {
@@ -261,10 +272,12 @@ public class ChatController {
             }
         };
 
-        ResponseEntity.BodyBuilder builder=ResponseEntity.ok()
+        ResponseEntity.BodyBuilder builder=ResponseEntity.status(status)
                 .contentType(MediaType.parseMediaType(contentType))
                 .header(HttpHeaders.CONTENT_DISPOSITION, disposition)
-                .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600");
+                .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
+                .header(HttpHeaders.ACCEPT_RANGES, "bytes");
+        if(contentRange!=null) builder.header(HttpHeaders.CONTENT_RANGE,contentRange);
         if(length>=0) builder.contentLength(length);
         return builder.body(stream);
     }
