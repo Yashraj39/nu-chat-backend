@@ -2,6 +2,7 @@ package com.pulsechat.service;
 
 import com.pulsechat.model.*;
 import com.pulsechat.repo.MessageRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Service;
@@ -16,9 +17,16 @@ public class MessageService {
  private final MongoTemplate mongo;
  private final RateLimiter limiter;
  private final CloudinaryService cloud;
+ private final int chatRateLimit;
 
- public MessageService(MessageRepository r, MongoTemplate m, RateLimiter l, CloudinaryService c){
-   repo=r;mongo=m;limiter=l;cloud=c;
+ public MessageService(
+   MessageRepository r,
+   MongoTemplate m,
+   RateLimiter l,
+   CloudinaryService c,
+   @Value("${app.chat-rate-limit:30}") int chatRateLimit
+ ){
+   repo=r;mongo=m;limiter=l;cloud=c;this.chatRateLimit=Math.max(1,chatRateLimit);
  }
 
  public List<Message> latest(){
@@ -36,7 +44,7 @@ public class MessageService {
  }
 
  public Message create(User u, MessageType type,String content,Message.FileInfo file,Message.MediaInfo media,String replyToMessageId){
-   if(!limiter.allow("chat:"+u.getId(),30)) throw new IllegalStateException("Too many messages. Please slow down.");
+   if(!limiter.allow("chat:"+u.getId(),chatRateLimit)) throw new IllegalStateException("Too many messages. Please slow down.");
    if(type==MessageType.TEXT){
      String c=content==null?"":content.trim();
      if(c.isBlank()||c.length()>2000) throw new IllegalArgumentException("Message must contain 1-2000 characters.");
@@ -79,12 +87,15 @@ public class MessageService {
        throw new IllegalArgumentException("Unsupported media type.");
      }
 
+     String directPreview = media.getPreviewUrl();
+     if(directPreview == null || directPreview.isBlank()) directPreview = url;
+
      return Message.MediaInfo.builder()
          .provider(media.getProvider())
          .providerId(media.getProviderId())
          .title(media.getTitle())
          .url(remote.url())
-         .previewUrl(remote.url())
+         .previewUrl(directPreview)
          .mimeType(remote.mimeType())
          .width(remote.width() > 0 ? remote.width() : media.getWidth())
          .height(remote.height() > 0 ? remote.height() : media.getHeight())
@@ -97,9 +108,6 @@ public class MessageService {
  }
 
  private Message.FileInfo normalizeExternalFile(Message.FileInfo file) {
-   // Files coming from /api/files/upload already have a Cloudinary publicId.
-   // Their URL is deliberately rewritten to the backend proxy, so never try
-   // to import that proxy URL back into Cloudinary.
    if(file.getPublicId() != null && !file.getPublicId().isBlank()) return file;
 
    String url = file.getUrl() == null ? "" : file.getUrl().trim();
