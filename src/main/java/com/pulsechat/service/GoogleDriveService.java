@@ -3,8 +3,8 @@ package com.pulsechat.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.auth.oauth2.AccessToken;
+import com.google.auth.oauth2.GoogleCredentials;
 import com.google.auth.oauth2.UserCredentials;
-import com.google.api.services.drive.DriveScopes;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -26,13 +26,14 @@ import java.util.*;
  */
 @Service
 public class GoogleDriveService {
+    private static final String DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
     private static final String DRIVE_API = "https://www.googleapis.com/drive/v3";
     private static final String DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3/files";
     private static final long MAX_UPLOAD_BYTES = 25L * 1024L * 1024L;
 
     private final ObjectMapper objectMapper;
     private final HttpClient http;
-    private final UserCredentials credentials;
+    private final GoogleCredentials credentials;
     private final String folderId;
     private final boolean publicFiles;
 
@@ -56,8 +57,8 @@ public class GoogleDriveService {
                     .setClientId(clientId.trim())
                     .setClientSecret(clientSecret.trim())
                     .setRefreshToken(refreshToken.trim())
-                    .build();
-            this.credentials.createScoped(Collections.singleton(DriveScopes.DRIVE));
+                    .build()
+                    .createScoped(Collections.singleton(DRIVE_SCOPE));
         }
     }
 
