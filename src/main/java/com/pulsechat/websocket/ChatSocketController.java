@@ -23,4 +23,14 @@ public class ChatSocketController {
    User u=users.findById(principal.getName()).orElseThrow();
    Message m=messages.delete(u,String.valueOf(body.get("id")));ws.convertAndSend("/topic/chat",m);
  }
+ @MessageMapping("/chat.typing")
+ public void typing(@Payload Map<String,Object> body,java.security.Principal principal){
+   User u=users.findById(principal.getName()).orElseThrow();
+   boolean typing = Boolean.TRUE.equals(body.get("typing"));
+   ws.convertAndSend("/topic/typing", Map.of(
+       "userId", u.getId(),
+       "userName", u.getDisplayName(),
+       "typing", typing
+   ));
+ }
 }
